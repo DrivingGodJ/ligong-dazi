@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 下载代码
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: 准备 Python 和 uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
           enable-cache: true
