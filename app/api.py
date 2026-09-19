@@ -30,12 +30,25 @@ from app.models import (
     Invitation,
     MatchCandidate,
     MatchRequest,
+    PeerFeedbackReview,
     Reminder,
+    SystemEvent,
     User,
     utcnow,
 )
+from app.post_activity import (
+    apply_moderation_decision,
+    calculate_leave_penalty,
+    eligible_peer_reviewer_ids,
+    finalize_feedback_with_peer_review,
+    moderate_feedback,
+    process_completed_activities,
+    refresh_hidden_profile,
+)
 from app.schemas import (
     ActivityCreate,
+    ActivityLeaveRequest,
+    ActivityLeaveResult,
     ActivityPublic,
     AgentRunPublic,
     CandidatePublic,
@@ -49,6 +62,10 @@ from app.schemas import (
     MatchConfirmResponse,
     MatchPreviewRequest,
     MatchPreviewResponse,
+    MyActivityItem,
+    PeerReviewCreate,
+    PeerReviewResult,
+    PeerReviewTask,
     PersonalizationReport,
     RegisterRequest,
     TokenResponse,
@@ -138,6 +155,15 @@ async def register(
         password_hash=hash_password(payload.password),
         display_name=payload.display_name.strip(),
         university=payload.university.strip(),
+        campus=payload.campus.strip() if payload.campus else None,
+        department=payload.department.strip() if payload.department else None,
+        grade_year=payload.grade_year,
+        bio=payload.bio.strip() if payload.bio else None,
+        interests=payload.interests,
+        preferred_locations=payload.preferred_locations,
+        social_style=payload.social_style,
+        preferred_group_min=payload.preferred_group_min,
+        preferred_group_max=payload.preferred_group_max,
     )
     session.add(user)
     await session.commit()
@@ -215,6 +241,188 @@ async def list_activities(
         statement = statement.where(Activity.category == category)
     activities = list((await session.scalars(statement)).all())
     return [await activity_public(session, activity) for activity in activities]
+
+
+@router.get("/activities/mine", response_model=list[MyActivityItem])
+async def list_my_activities(
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[MyActivityItem]:
+    completed_count = await process_completed_activities(session)
+    if completed_count:
+        await session.commit()
+    memberships = list(
+        (
+            await session.scalars(
+                select(ActivityMember)
+                .where(ActivityMember.user_id == current_user.id)
+                .order_by(ActivityMember.joined_at.desc())
+            )
+        ).all()
+    )
+    result: list[MyActivityItem] = []
+    for membership in memberships:
+        activity = await session.get(Activity, membership.activity_id)
+        if activity is None:
+            continue
+        public_activity = await activity_public(session, activity)
+        penalty, policy_message = calculate_leave_penalty(activity)
+        can_leave = membership.status == "confirmed" and utcnow() < activity.ends_at
+        if membership.role == "owner" and public_activity.participant_count > 1:
+            can_leave = False
+            policy_message = "你是发起人且已有搭子，暂不能直接退出；请先和成员协商。"
+
+        feedback_targets: list[UserPublic] = []
+        if activity.ends_at <= utcnow() and membership.status == "confirmed":
+            already_reviewed = set(
+                (
+                    await session.scalars(
+                        select(Feedback.reviewee_id).where(
+                            Feedback.activity_id == activity.id,
+                            Feedback.reviewer_id == current_user.id,
+                        )
+                    )
+                ).all()
+            )
+            target_ids = list(
+                (
+                    await session.scalars(
+                        select(ActivityMember.user_id).where(
+                            ActivityMember.activity_id == activity.id,
+                            ActivityMember.status == "confirmed",
+                            ActivityMember.user_id != current_user.id,
+                        )
+                    )
+                ).all()
+            )
+            for user_id in target_ids:
+                if user_id in already_reviewed:
+                    continue
+                target = await session.get(User, user_id)
+                if target is not None:
+                    feedback_targets.append(user_public(target))
+
+        result.append(
+            MyActivityItem(
+                activity=public_activity,
+                role=membership.role,
+                membership_status=membership.status,
+                joined_at=membership.joined_at,
+                left_at=membership.left_at,
+                can_leave=can_leave,
+                leave_penalty=penalty if can_leave else 0,
+                leave_policy_message=policy_message,
+                needs_feedback=bool(feedback_targets),
+                feedback_targets=feedback_targets,
+            )
+        )
+    return sorted(result, key=lambda item: item.activity.starts_at, reverse=True)
+
+
+@router.post("/activities/{activity_id}/leave", response_model=ActivityLeaveResult)
+async def leave_activity(
+    activity_id: str,
+    payload: ActivityLeaveRequest,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ActivityLeaveResult:
+    activity = await session.scalar(
+        select(Activity).where(Activity.id == activity_id).with_for_update()
+    )
+    membership = await session.scalar(
+        select(ActivityMember)
+        .where(
+            ActivityMember.activity_id == activity_id,
+            ActivityMember.user_id == current_user.id,
+        )
+        .with_for_update()
+    )
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    if membership.status != "confirmed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="你已经不在这个活动中")
+    penalty, policy_message = calculate_leave_penalty(activity)
+    if utcnow() >= activity.ends_at:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=policy_message)
+
+    member_count = int(
+        await session.scalar(
+            select(func.count(ActivityMember.id)).where(
+                ActivityMember.activity_id == activity.id,
+                ActivityMember.status == "confirmed",
+            )
+        )
+        or 0
+    )
+    if membership.role == "owner" and member_count > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="发起人已有搭子时不能直接退出，请先与成员协商或联系管理员。",
+        )
+    if penalty and not payload.confirm_penalty:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"这次退出会扣 {penalty} 分，请确认后再退出。",
+        )
+
+    old_score = current_user.credit_score
+    current_user.credit_score = max(0, current_user.credit_score - penalty)
+    actual_delta = current_user.credit_score - old_score
+    membership.status = "withdrawn"
+    membership.left_at = utcnow()
+    membership.leave_penalty = -actual_delta
+    if membership.role == "owner":
+        activity.status = "cancelled"
+    elif activity.status == "formed":
+        activity.status = "open"
+
+    invitation = await session.scalar(
+        select(Invitation).where(
+            Invitation.activity_id == activity.id,
+            Invitation.invitee_id == current_user.id,
+            Invitation.status == "accepted",
+        )
+    )
+    if invitation is not None:
+        invitation.status = "withdrawn"
+    if actual_delta:
+        session.add(
+            CreditEvent(
+                user_id=current_user.id,
+                delta=actual_delta,
+                reason="late_activity_withdrawal",
+                activity_id=activity.id,
+            )
+        )
+    session.add(
+        SystemEvent(
+            category="activity_membership",
+            status="attention" if penalty else "success",
+            title="用户退出了活动",
+            message=(
+                f"{current_user.display_name}退出“{activity.title}”，信用分扣除 {penalty} 分。"
+                if penalty
+                else f"{current_user.display_name}提前退出“{activity.title}”，未扣信用分。"
+            ),
+            details={
+                "activity_id": activity.id,
+                "user_id": current_user.id,
+                "penalty": penalty,
+            },
+        )
+    )
+    await session.commit()
+    return ActivityLeaveResult(
+        activity_id=activity.id,
+        membership_status=membership.status,
+        credit_delta=actual_delta,
+        credit_score=current_user.credit_score,
+        message=(
+            f"已退出活动，信用分扣除 {penalty} 分。"
+            if penalty
+            else "已退出活动，没有扣信用分。"
+        ),
+    )
 
 
 @router.post(
@@ -445,7 +653,9 @@ async def confirm_match(
             invitations.append(invitation)
         match_request.status = "confirmed"
         match_request.activity_id = activity.id
-        write_tools = ["create_activity", "invite_user", "schedule_reminder"]
+        write_tools = ["create_activity", "schedule_reminder"]
+        if payload.candidate_user_ids:
+            write_tools.insert(1, "invite_user")
 
     reminder_at = match_request.starts_at - timedelta(hours=1)
     if reminder_at > utcnow():
@@ -588,6 +798,15 @@ async def submit_feedback(
 ) -> FeedbackResult:
     if payload.reviewee_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="不能评价自己")
+    activity = await session.get(Activity, payload.activity_id)
+    if activity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    if activity.ends_at > utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="活动结束后才能评价，先好好享受这次搭子局吧。",
+        )
+    await process_completed_activities(session)
     member_ids = set(
         (
             await session.scalars(
@@ -618,43 +837,137 @@ async def submit_feedback(
     feedback = Feedback(reviewer_id=current_user.id, **payload.model_dump())
     session.add(feedback)
     await session.flush()
-    requested_delta = {
-        "attended": 1,
-        "cancelled_early": -1,
-        "late_cancel": -3,
-        "no_show": -8,
-    }[payload.attendance]
-    old_reviewee_score = reviewee.credit_score
-    reviewee.credit_score = max(0, min(100, reviewee.credit_score + requested_delta))
-    reviewee_delta = reviewee.credit_score - old_reviewee_score
-    old_reviewer_score = current_user.credit_score
-    current_user.credit_score = min(100, current_user.credit_score + 1)
-    reviewer_delta = current_user.credit_score - old_reviewer_score
-    session.add_all(
-        [
-            CreditEvent(
-                user_id=reviewee.id,
-                delta=reviewee_delta,
-                reason=payload.attendance,
-                activity_id=payload.activity_id,
-                source_feedback_id=feedback.id,
-            ),
-            CreditEvent(
-                user_id=current_user.id,
-                delta=reviewer_delta,
-                reason="submitted_feedback",
-                activity_id=payload.activity_id,
-                source_feedback_id=feedback.id,
-            ),
-        ]
-    )
+    decision = await moderate_feedback(session, feedback, current_user, reviewee)
+    await apply_moderation_decision(session, feedback, decision)
+    if not decision.requires_peer_review:
+        await session.flush()
+        await refresh_hidden_profile(session, reviewee)
+        await refresh_hidden_profile(session, current_user)
     await session.commit()
     return FeedbackResult(
         feedback_id=feedback.id,
         reviewee_credit_score=reviewee.credit_score,
-        reviewee_credit_delta=reviewee_delta,
+        reviewee_credit_delta=decision.reviewee_delta,
         reviewer_credit_score=current_user.credit_score,
-        reviewer_credit_delta=reviewer_delta,
+        reviewer_credit_delta=decision.reviewer_delta,
+        moderation_status=decision.status,
+        requires_peer_review=decision.requires_peer_review,
+        ai_summary=decision.reason,
+    )
+
+
+@router.get("/feedback/peer-review-tasks", response_model=list[PeerReviewTask])
+async def list_peer_review_tasks(
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[PeerReviewTask]:
+    pending_feedback = list(
+        (
+            await session.scalars(
+                select(Feedback)
+                .where(Feedback.moderation_status == "needs_peer_review")
+                .order_by(Feedback.created_at.asc())
+            )
+        ).all()
+    )
+    tasks: list[PeerReviewTask] = []
+    for feedback in pending_feedback:
+        if current_user.id not in await eligible_peer_reviewer_ids(session, feedback):
+            continue
+        existing = await session.scalar(
+            select(PeerFeedbackReview.id).where(
+                PeerFeedbackReview.feedback_id == feedback.id,
+                PeerFeedbackReview.reviewer_id == current_user.id,
+            )
+        )
+        if existing:
+            continue
+        activity = await session.get(Activity, feedback.activity_id)
+        author = await session.get(User, feedback.reviewer_id)
+        subject = await session.get(User, feedback.reviewee_id)
+        if activity is None or author is None or subject is None:
+            continue
+        tasks.append(
+            PeerReviewTask(
+                feedback_id=feedback.id,
+                activity=await activity_public(session, activity),
+                author=user_public(author),
+                subject=user_public(subject),
+                attendance=feedback.attendance,
+                rating=feedback.rating,
+                comment=feedback.comment,
+                personality_tags=feedback.personality_tags,
+                incident_tags=feedback.incident_tags,
+                ai_summary=feedback.ai_reason or "审核 Agent 希望获得同场参与者的补充信息。",
+            )
+        )
+    return tasks
+
+
+@router.post(
+    "/feedback/{feedback_id}/peer-review",
+    response_model=PeerReviewResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def submit_peer_review(
+    feedback_id: str,
+    payload: PeerReviewCreate,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> PeerReviewResult:
+    feedback = await session.scalar(
+        select(Feedback).where(Feedback.id == feedback_id).with_for_update()
+    )
+    if feedback is None or feedback.moderation_status != "needs_peer_review":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="这条评价不需要复核，或已经处理完成。",
+        )
+    if current_user.id not in await eligible_peer_reviewer_ids(session, feedback):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有同场且与原评价无关的第三位参与者可以复核。",
+        )
+    existing = await session.scalar(
+        select(PeerFeedbackReview.id).where(
+            PeerFeedbackReview.feedback_id == feedback.id,
+            PeerFeedbackReview.reviewer_id == current_user.id,
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="你已经复核过这条评价")
+    original_reviewer = await session.get(User, feedback.reviewer_id)
+    reviewee = await session.get(User, feedback.reviewee_id)
+    if original_reviewer is None or reviewee is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="评价关联用户不存在")
+
+    peer_review = PeerFeedbackReview(
+        feedback_id=feedback.id,
+        reviewer_id=current_user.id,
+        **payload.model_dump(),
+    )
+    session.add(peer_review)
+    await session.flush()
+    summary = await finalize_feedback_with_peer_review(
+        session,
+        feedback,
+        peer_review,
+        original_reviewer,
+        reviewee,
+        current_user,
+    )
+    await session.flush()
+    await refresh_hidden_profile(session, reviewee)
+    await refresh_hidden_profile(session, original_reviewer)
+    await refresh_hidden_profile(session, current_user)
+    await session.commit()
+    return PeerReviewResult(
+        feedback_id=feedback.id,
+        moderation_status=feedback.moderation_status,
+        reviewee_credit_delta=feedback.reviewee_credit_delta,
+        original_reviewer_credit_delta=feedback.reviewer_credit_delta,
+        peer_reviewer_credit_delta=peer_review.reviewer_credit_delta,
+        ai_summary=summary,
     )
 
 

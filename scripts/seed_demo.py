@@ -123,6 +123,51 @@ async def seed() -> None:
                         status="confirmed",
                     )
                 )
+
+            finished_owner = users["xiaozeng@njust.demo"]
+            finished = await session.scalar(
+                select(Activity).where(
+                    Activity.owner_id == finished_owner.id,
+                    Activity.title == "昨晚南区羽毛球",
+                )
+            )
+            if finished is None:
+                ended_at = datetime.now(UTC) - timedelta(hours=10)
+                finished = Activity(
+                    owner_id=finished_owner.id,
+                    title="昨晚南区羽毛球",
+                    category="羽毛球",
+                    starts_at=ended_at - timedelta(hours=2),
+                    ends_at=ended_at,
+                    location="南区体育馆",
+                    capacity=4,
+                    description="用于体验活动结束后的评价与第三人复核流程。",
+                    status="formed",
+                )
+                session.add(finished)
+                await session.flush()
+                session.add_all(
+                    [
+                        ActivityMember(
+                            activity_id=finished.id,
+                            user_id=finished_owner.id,
+                            role="owner",
+                            status="confirmed",
+                        ),
+                        ActivityMember(
+                            activity_id=finished.id,
+                            user_id=users["xiaowang@njust.demo"].id,
+                            role="participant",
+                            status="confirmed",
+                        ),
+                        ActivityMember(
+                            activity_id=finished.id,
+                            user_id=users["xiaoli@njust.demo"].id,
+                            role="participant",
+                            status="confirmed",
+                        ),
+                    ]
+                )
             await session.commit()
     finally:
         await database.dispose()

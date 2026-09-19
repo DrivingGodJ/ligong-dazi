@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -13,7 +14,22 @@ from sqlalchemy import text
 from app.admin import router as admin_router
 from app.api import router as api_router
 from app.core import DatabaseRuntime, Settings, get_settings
+from app.migrations import ensure_sqlite_compatibility
 from app.models import Base
+from app.post_activity import process_completed_activities
+
+logger = logging.getLogger(__name__)
+
+
+async def post_activity_maintenance(database: DatabaseRuntime) -> None:
+    while True:
+        try:
+            async with database.session_factory() as session:
+                await process_completed_activities(session)
+                await session.commit()
+        except Exception:
+            logger.exception("活动结束后的画像分析任务执行失败")
+        await asyncio.sleep(60)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -27,7 +43,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if app_settings.auto_create_schema:
             async with database.engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
+            await ensure_sqlite_compatibility(database.engine)
+        async with database.session_factory() as session:
+            await process_completed_activities(session)
+            await session.commit()
+        maintenance_task = asyncio.create_task(post_activity_maintenance(database))
         yield
+        maintenance_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await maintenance_task
         await database.dispose()
 
     app = FastAPI(

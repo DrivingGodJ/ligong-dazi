@@ -7,11 +7,11 @@
       name="description"
       content="理工搭子局：提交活动需求，让 AI Agent 查询候选、解释匹配并在确认后完成组局。"
     />
-    <meta name="theme-color" content="#6436c8" />
+    <meta name="theme-color" content="#6d3ed2" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=2" />
-    <script src="/static/app.js?v=2" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=3" />
+    <script src="/static/app.js?v=3" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -37,7 +37,10 @@
           收到的邀请
           <span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span>
         </button>
-        <button class="nav-button" type="button" data-tab="activities">活动</button>
+        <button class="nav-button" type="button" data-tab="activities">
+          我的活动
+          <span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span>
+        </button>
         <button class="nav-button" type="button" data-tab="profile">我的画像</button>
       </nav>
 
@@ -51,15 +54,15 @@
     <main id="main-content">
       <section id="auth-view" class="auth-shell" aria-labelledby="auth-title">
         <div class="auth-intro">
-          <p class="eyebrow">AI 搭子执行 Agent</p>
-          <h1 id="auth-title">说清需求，剩下的交给 Agent</h1>
+          <p class="eyebrow">校园生活，不必总是单打独斗</p>
+          <h1 id="auth-title">今天想做什么？搭子这就来</h1>
           <p>
-            它会查询已有活动和可用用户，计算每一项匹配分。只有你确认后，系统才会创建活动或发送邀请。
+            运动、吃饭、学习或看电影，把时间地点告诉 Agent。它负责认真筛选，你负责挑一个看对眼的安排。
           </p>
           <ol class="auth-steps" aria-label="使用流程">
-            <li><span>1</span>填写时间、地点与个性化要求</li>
-            <li><span>2</span>查看候选和可解释匹配分</li>
-            <li><span>3</span>确认后再邀请和组局</li>
+            <li><span>1</span>先用画像告诉我们“你是哪一挂”</li>
+            <li><span>2</span>Agent 找人、找局，还会把理由讲明白</li>
+            <li><span>3</span>你点头后才邀请，随时掌握活动状态</li>
           </ol>
         </div>
 
@@ -119,26 +122,86 @@
 
           <div id="register-panel" class="is-hidden" role="tabpanel" aria-labelledby="register-tab">
             <form id="register-form" class="form-stack">
-              <label>
-                昵称
-                <input name="display_name" type="text" autocomplete="nickname" maxlength="80" required />
-              </label>
-              <label>
-                邮箱
-                <input name="email" type="email" autocomplete="email" required />
-              </label>
-              <label>
-                密码
-                <input
-                  name="password"
-                  type="password"
-                  autocomplete="new-password"
-                  minlength="8"
-                  required
-                />
-                <span class="field-help">至少 8 位</span>
-              </label>
-              <button class="button button-primary button-wide" type="submit">注册并完善画像</button>
+              <div class="onboarding-progress" aria-label="注册进度">
+                <span class="is-active" data-register-dot="account"><b>1</b>账号</span>
+                <i aria-hidden="true"></i>
+                <span data-register-dot="profile"><b>2</b>认识你</span>
+              </div>
+
+              <div class="register-step" data-register-step="account">
+                <div class="register-step-heading">
+                  <span class="mini-sticker" aria-hidden="true">Hi</span>
+                  <div><strong>先把门牌号挂上</strong><small>30 秒建好账号</small></div>
+                </div>
+                <label>
+                  大家怎么称呼你
+                  <input name="display_name" type="text" autocomplete="nickname" maxlength="80" placeholder="例如：小曾" required />
+                </label>
+                <label>
+                  邮箱
+                  <input name="email" type="email" autocomplete="email" required />
+                </label>
+                <label>
+                  密码
+                  <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+                  <span class="field-help">至少 8 位，别用容易猜到的组合</span>
+                </label>
+                <button id="register-next" class="button button-primary button-wide" type="button">下一步：做个小画像</button>
+              </div>
+
+              <div class="register-step is-hidden" data-register-step="profile">
+                <div class="register-step-heading">
+                  <span class="mini-sticker mini-sticker-orange" aria-hidden="true">You</span>
+                  <div><strong>让好搭子更容易找到你</strong><small>这些内容之后都能修改</small></div>
+                </div>
+                <div class="two-columns compact-fields">
+                  <label>
+                    常驻校区
+                    <input name="campus" type="text" maxlength="80" placeholder="例如：南区" required />
+                  </label>
+                  <label>
+                    年级
+                    <select name="grade_year" required>
+                      <option value="">请选择</option>
+                      <option value="1">大一</option><option value="2">大二</option>
+                      <option value="3">大三</option><option value="4">大四</option>
+                      <option value="5">研一</option><option value="6">研二</option>
+                      <option value="7">研三</option><option value="8">博士生</option>
+                    </select>
+                  </label>
+                </div>
+                <label>
+                  院系
+                  <input name="department" type="text" maxlength="120" placeholder="例如：设计艺术与传媒学院" required />
+                </label>
+                <fieldset class="onboarding-choices">
+                  <legend>平时喜欢做什么（至少选一项）</legend>
+                  <div class="choice-grid choice-grid-small">
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="羽毛球" /><span>羽毛球</span></label>
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="跑步" /><span>跑步</span></label>
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="自习" /><span>自习</span></label>
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="摄影" /><span>摄影</span></label>
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="电影" /><span>电影</span></label>
+                    <label class="choice-chip"><input type="checkbox" name="interests" value="吃饭" /><span>吃饭</span></label>
+                  </div>
+                </fieldset>
+                <label>
+                  常去地点
+                  <input name="preferred_locations" type="text" placeholder="例如：南区体育馆，图书馆" required />
+                </label>
+                <fieldset class="social-choice">
+                  <legend>和搭子相处时，你更像</legend>
+                  <div class="social-cards">
+                    <label><input type="radio" name="social_style" value="quiet" /><span><b>安静派</b><small>慢热、专注</small></span></label>
+                    <label><input type="radio" name="social_style" value="balanced" checked /><span><b>都可以</b><small>看场合切换</small></span></label>
+                    <label><input type="radio" name="social_style" value="outgoing" /><span><b>气氛派</b><small>主动、健谈</small></span></label>
+                  </div>
+                </fieldset>
+                <div class="register-actions">
+                  <button id="register-back" class="button button-quiet" type="button">上一步</button>
+                  <button class="button button-primary" type="submit">完成注册，去找搭子</button>
+                </div>
+              </div>
             </form>
           </div>
           <p id="auth-error" class="form-error is-hidden" role="alert"></p>
@@ -270,11 +333,12 @@
                 <div id="confirm-bar" class="confirm-bar is-hidden">
                   <div>
                     <strong id="selection-summary">尚未选择候选</strong>
-                    <span>确认前不会发送邀请</span>
+                    <span>没挑中也没关系，可以先发布活动等人加入</span>
                   </div>
-                  <button id="confirm-match-button" class="button button-accent" type="button">
-                    确认并执行
-                  </button>
+                  <div class="confirm-actions">
+                    <button id="create-solo-button" class="button button-quiet" type="button">先发布，等人加入</button>
+                    <button id="confirm-match-button" class="button button-accent" type="button">确认并执行</button>
+                  </div>
                 </div>
               </div>
 
@@ -310,12 +374,30 @@
         <section id="panel-activities" class="tab-panel is-hidden" data-panel="activities" aria-labelledby="activities-heading">
           <div class="page-heading">
             <div>
-              <p class="eyebrow">近期安排</p>
-              <h1 id="activities-heading">活动</h1>
+              <p class="eyebrow">从约好到见面，再到认真说声谢谢</p>
+              <h1 id="activities-heading">我的活动</h1>
+              <p class="heading-copy">接受邀请或创建活动后都会出现在这里。退出越晚，信用扣分越多。</p>
             </div>
             <button class="button button-quiet" type="button" data-refresh="activities">刷新</button>
           </div>
+          <div class="activity-filters" role="tablist" aria-label="活动筛选">
+            <button class="filter-chip is-active" type="button" data-activity-filter="upcoming">接下来</button>
+            <button class="filter-chip" type="button" data-activity-filter="review">待评价</button>
+            <button class="filter-chip" type="button" data-activity-filter="history">过去的</button>
+          </div>
           <div id="activity-list" class="list-surface"></div>
+
+          <section id="peer-review-section" class="peer-review-section is-hidden" aria-labelledby="peer-review-heading">
+            <div class="section-heading-row">
+              <div>
+                <p class="eyebrow">同场见证</p>
+                <h2 id="peer-review-heading">有评价想听听你的看法</h2>
+              </div>
+              <span id="peer-task-count" class="count-pill">0 条</span>
+            </div>
+            <p class="section-intro">只有同场的第三位参与者会看到。请判断哪些内容真实、哪些需要补充，不用站队。</p>
+            <div id="peer-review-list" class="peer-review-list"></div>
+          </section>
         </section>
 
         <section id="panel-profile" class="tab-panel is-hidden" data-panel="profile" aria-labelledby="profile-heading">
@@ -323,7 +405,7 @@
             <div>
               <p class="eyebrow">匹配依据</p>
               <h1 id="profile-heading">我的画像</h1>
-              <p class="heading-copy">这些信息只用于提高匹配质量，不会展示邮箱和密码。</p>
+              <p class="heading-copy">你填写的是公开匹配画像；活动后 Agent 学到的隐藏画像只用于匹配与风控，不能被任何用户直接修改。</p>
             </div>
             <div class="credit-card" aria-label="当前信用分">
               <span>搭子信用</span>
@@ -397,6 +479,114 @@
         </section>
       </section>
     </main>
+
+    <dialog id="leave-dialog" class="modal-card">
+      <form method="dialog" class="modal-shell">
+        <button class="modal-close" type="submit" value="cancel" aria-label="关闭">×</button>
+        <p class="eyebrow">退出前再看一眼</p>
+        <h2 id="leave-dialog-title">确定退出活动？</h2>
+        <p id="leave-dialog-copy" class="modal-copy"></p>
+        <div id="leave-penalty-card" class="penalty-card"></div>
+        <div class="modal-actions">
+          <button class="button button-quiet" type="submit" value="cancel">我再想想</button>
+          <button id="confirm-leave-button" class="button button-danger" type="button">确认退出</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="feedback-dialog" class="modal-card modal-card-wide">
+      <form id="feedback-form" class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="feedback-dialog" aria-label="关闭">×</button>
+        <p class="eyebrow">活动结束，互相留个脚印</p>
+        <h2 id="feedback-dialog-title">评价你的搭子</h2>
+        <p class="modal-copy">评价会先经过审核 Agent。高影响或互相矛盾的内容，可能请同场第三位参与者复核。</p>
+        <input name="activity_id" type="hidden" />
+        <input name="reviewee_id" type="hidden" />
+
+        <fieldset class="rating-field">
+          <legend>这次相处打几分</legend>
+          <div class="rating-options" aria-label="评分">
+            <label><input type="radio" name="rating" value="1" required /><span>1<small>不太好</small></span></label>
+            <label><input type="radio" name="rating" value="2" /><span>2<small>有点糟</small></span></label>
+            <label><input type="radio" name="rating" value="3" /><span>3<small>还可以</small></span></label>
+            <label><input type="radio" name="rating" value="4" /><span>4<small>挺不错</small></span></label>
+            <label><input type="radio" name="rating" value="5" /><span>5<small>超合拍</small></span></label>
+          </div>
+        </fieldset>
+
+        <label>
+          到场情况
+          <select name="attendance" required>
+            <option value="attended">正常参加</option>
+            <option value="cancelled_early">提前说明并取消</option>
+            <option value="late_cancel">临近活动才取消</option>
+            <option value="no_show">没有出现，也没说一声</option>
+          </select>
+        </label>
+
+        <fieldset class="tag-field">
+          <legend>相处起来是什么感觉（最多选 4 个）</legend>
+          <div class="tag-options">
+            <label><input type="checkbox" name="personality_tags" value="quiet" /><span>偏安静</span></label>
+            <label><input type="checkbox" name="personality_tags" value="outgoing" /><span>偏外向</span></label>
+            <label><input type="checkbox" name="personality_tags" value="patient" /><span>有耐心</span></label>
+            <label><input type="checkbox" name="personality_tags" value="talkative" /><span>很健谈</span></label>
+            <label><input type="checkbox" name="personality_tags" value="focused" /><span>很专注</span></label>
+            <label><input type="checkbox" name="personality_tags" value="easygoing" /><span>好相处</span></label>
+            <label><input type="checkbox" name="personality_tags" value="organized" /><span>有条理</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="tag-field">
+          <legend>这次有哪些事实值得记录</legend>
+          <div class="tag-options">
+            <label><input type="checkbox" name="incident_tags" value="punctual" /><span>准时到场</span></label>
+            <label><input type="checkbox" name="incident_tags" value="helpful" /><span>乐于帮忙</span></label>
+            <label><input type="checkbox" name="incident_tags" value="clear_communication" /><span>沟通清楚</span></label>
+            <label><input type="checkbox" name="incident_tags" value="late" /><span>有迟到</span></label>
+            <label><input type="checkbox" name="incident_tags" value="cancelled" /><span>临时取消</span></label>
+            <label><input type="checkbox" name="incident_tags" value="no_show" /><span>被放鸽子</span></label>
+          </div>
+        </fieldset>
+
+        <label>
+          再写几句（建议写清楚发生了什么）
+          <textarea name="comment" rows="4" maxlength="500" placeholder="例如：提前十分钟到场，沟通很顺畅，下次还愿意一起。"></textarea>
+        </label>
+        <p id="feedback-error" class="form-error is-hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button class="button button-quiet" type="button" data-close-dialog="feedback-dialog">稍后再写</button>
+          <button class="button button-primary" type="submit">交给审核 Agent</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="peer-review-dialog" class="modal-card modal-card-wide">
+      <form id="peer-review-form" class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="peer-review-dialog" aria-label="关闭">×</button>
+        <p class="eyebrow">第三人复核</p>
+        <h2 id="peer-dialog-title">帮忙还原真实情况</h2>
+        <p id="peer-dialog-context" class="modal-copy"></p>
+        <input name="feedback_id" type="hidden" />
+        <fieldset class="verdict-field">
+          <legend>你认为原评价</legend>
+          <div class="verdict-options">
+            <label><input type="radio" name="verdict" value="mostly_true" required /><span><b>基本真实</b><small>主要事实吻合</small></span></label>
+            <label><input type="radio" name="verdict" value="partly_true" /><span><b>部分真实</b><small>有对有错</small></span></label>
+            <label><input type="radio" name="verdict" value="not_sure" /><span><b>无法确认</b><small>我没看到全程</small></span></label>
+            <label><input type="radio" name="verdict" value="mostly_false" /><span><b>多数不实</b><small>主要事实不符</small></span></label>
+          </div>
+        </fieldset>
+        <label>哪些内容真实<textarea name="true_parts" rows="2" maxlength="500"></textarea></label>
+        <label>哪些内容不真实或需要补充<textarea name="false_parts" rows="2" maxlength="500"></textarea></label>
+        <label>补充说明<textarea name="comment" rows="3" maxlength="500"></textarea></label>
+        <p id="peer-review-error" class="form-error is-hidden" role="alert"></p>
+        <div class="modal-actions">
+          <button class="button button-quiet" type="button" data-close-dialog="peer-review-dialog">先不判断</button>
+          <button class="button button-primary" type="submit">提交复核</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   </body>

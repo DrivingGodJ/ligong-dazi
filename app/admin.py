@@ -560,6 +560,13 @@ def _system_log_item(event: SystemEvent) -> AdminLogItem:
         for key, value in (event.details or {}).items()
         if isinstance(value, (str, int, bool)) or value is None
     }
+    context_map = {
+        "ai_config": "AI 服务设置",
+        "ai_connection": "AI 服务连接",
+        "activity_membership": "活动参与情况",
+        "feedback_review": "活动评价审核",
+        "post_activity_agent": "活动结束后的画像学习",
+    }
     return AdminLogItem(
         id=event.id,
         kind="system",
@@ -568,7 +575,7 @@ def _system_log_item(event: SystemEvent) -> AdminLogItem:
         title=event.title,
         message=event.message,
         created_at=event.created_at,
-        context="AI 服务设置",
+        context=context_map.get(event.category, "系统运行记录"),
         technical_info=safe_details,
     )
 

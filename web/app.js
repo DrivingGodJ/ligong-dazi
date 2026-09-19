@@ -7,6 +7,10 @@ const state = {
   preview: null,
   selectedUsers: new Set(),
   selectedActivity: null,
+  activities: [],
+  activityFilter: "upcoming",
+  pendingLeave: null,
+  peerTasks: [],
   runningTimer: null,
   toastTimer: null,
 };
@@ -40,11 +44,29 @@ const elements = {
   successCopy: document.querySelector("#success-copy"),
   invitationList: document.querySelector("#invitation-list"),
   inviteBadge: document.querySelector("#invite-badge"),
+  activityBadge: document.querySelector("#activity-badge"),
   activityList: document.querySelector("#activity-list"),
+  peerReviewSection: document.querySelector("#peer-review-section"),
+  peerReviewList: document.querySelector("#peer-review-list"),
+  peerTaskCount: document.querySelector("#peer-task-count"),
   profileForm: document.querySelector("#profile-form"),
   profileCredit: document.querySelector("#profile-credit"),
   profileStatus: document.querySelector("#profile-status"),
   agentModePill: document.querySelector("#agent-mode-pill"),
+  leaveDialog: document.querySelector("#leave-dialog"),
+  leaveDialogTitle: document.querySelector("#leave-dialog-title"),
+  leaveDialogCopy: document.querySelector("#leave-dialog-copy"),
+  leavePenaltyCard: document.querySelector("#leave-penalty-card"),
+  confirmLeaveButton: document.querySelector("#confirm-leave-button"),
+  feedbackDialog: document.querySelector("#feedback-dialog"),
+  feedbackForm: document.querySelector("#feedback-form"),
+  feedbackDialogTitle: document.querySelector("#feedback-dialog-title"),
+  feedbackError: document.querySelector("#feedback-error"),
+  peerReviewDialog: document.querySelector("#peer-review-dialog"),
+  peerReviewForm: document.querySelector("#peer-review-form"),
+  peerDialogTitle: document.querySelector("#peer-dialog-title"),
+  peerDialogContext: document.querySelector("#peer-dialog-context"),
+  peerReviewError: document.querySelector("#peer-review-error"),
   toast: document.querySelector("#toast"),
 };
 
@@ -127,6 +149,31 @@ function switchAuthPanel(panel) {
   document.querySelector("#login-tab").setAttribute("aria-selected", String(loginActive));
   document.querySelector("#register-tab").setAttribute("aria-selected", String(!loginActive));
   hideInlineError(elements.authError);
+  if (!loginActive) showRegisterStep("account");
+}
+
+function showRegisterStep(step) {
+  document.querySelectorAll("[data-register-step]").forEach((panel) => {
+    panel.classList.toggle("is-hidden", panel.dataset.registerStep !== step);
+  });
+  document.querySelectorAll("[data-register-dot]").forEach((dot) => {
+    const active = dot.dataset.registerDot === step;
+    dot.classList.toggle("is-active", active);
+    dot.classList.toggle("is-done", step === "profile" && dot.dataset.registerDot === "account");
+  });
+}
+
+function continueRegistration() {
+  const fields = ["display_name", "email", "password"].map(
+    (name) => elements.registerForm.elements[name],
+  );
+  const invalid = fields.find((field) => !field.checkValidity());
+  if (invalid) {
+    invalid.reportValidity();
+    return;
+  }
+  showRegisterStep("profile");
+  elements.registerForm.elements.campus.focus();
 }
 
 function showAuthenticatedShell() {
@@ -137,6 +184,7 @@ function showAuthenticatedShell() {
   elements.accountName.textContent = state.user.display_name;
   populateProfileForm();
   loadInvitations(true);
+  loadActivities(true);
 }
 
 function showAuthShell() {
@@ -191,21 +239,34 @@ async function handleRegister(event) {
   const button = event.submitter;
   setButtonLoading(button, true, "正在创建账号…");
   const form = new FormData(elements.registerForm);
+  const interests = form.getAll("interests");
+  if (!interests.length) {
+    showInlineError(elements.authError, "至少选一个平时喜欢的活动，这样 Agent 才知道从哪里开始。 ");
+    document.querySelector(".onboarding-choices").scrollIntoView({ behavior: "smooth", block: "center" });
+    setButtonLoading(button, false);
+    return;
+  }
   try {
     const result = await api("/auth/register", {
       method: "POST",
       body: JSON.stringify({
-        display_name: form.get("display_name"),
+        display_name: String(form.get("display_name")).trim(),
         email: form.get("email"),
         password: form.get("password"),
         university: "南京理工大学",
+        campus: String(form.get("campus")).trim(),
+        department: String(form.get("department")).trim(),
+        grade_year: Number(form.get("grade_year")),
+        interests,
+        preferred_locations: splitList(form.get("preferred_locations")),
+        social_style: form.get("social_style"),
       }),
     });
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
     await loadCurrentUser();
-    switchTab("profile");
-    elements.profileStatus.textContent = "先补充兴趣和常去地点，匹配会更准确。";
+    switchTab("match");
+    showToast("画像已就位，去发起第一场搭子局吧");
   } catch (error) {
     showInlineError(elements.authError, error.message);
   } finally {
@@ -393,9 +454,8 @@ function renderCandidates() {
   if (!candidates.length) {
     elements.candidateList.innerHTML = `
       <div class="empty-list">
-        <div><strong>暂时没有合适候选</strong><br />可以调整时间、地点或个性化要求后重试。</div>
+        <div><strong>暂时没有刚刚好的候选</strong><br />可以调整条件重试，也可以先把活动发布出去，等同学主动加入。</div>
       </div>`;
-    elements.confirmBar.classList.add("is-hidden");
     return;
   }
   elements.candidateList.innerHTML = candidates
@@ -478,28 +538,37 @@ function handleCandidateSelection(event) {
   updateSelectionSummary();
 }
 
-async function confirmMatch() {
-  if (!state.preview || (!state.selectedActivity && !state.selectedUsers.size)) return;
+async function confirmMatch(createSoloActivity = false) {
+  if (!state.preview) return;
+  if (!createSoloActivity && !state.selectedActivity && !state.selectedUsers.size) return;
   hideInlineError(elements.matchError);
-  setButtonLoading(elements.confirmButton, true, "正在执行…");
+  const actionButton = createSoloActivity
+    ? document.querySelector("#create-solo-button")
+    : elements.confirmButton;
+  setButtonLoading(actionButton, true, createSoloActivity ? "正在发布…" : "正在执行…");
   try {
     const result = await api(`/matches/${state.preview.match_request_id}/confirm`, {
       method: "POST",
       body: JSON.stringify({
-        candidate_user_ids: [...state.selectedUsers],
-        existing_activity_id: state.selectedActivity,
+        candidate_user_ids: createSoloActivity ? [] : [...state.selectedUsers],
+        existing_activity_id: createSoloActivity ? null : state.selectedActivity,
+        create_solo_activity: createSoloActivity,
       }),
     });
-    elements.successTitle.textContent = result.status === "joined" ? "已加入活动" : "搭子局已创建";
-    elements.successCopy.textContent = result.invitations.length
-      ? `“${result.activity.title}”已创建，并向 ${result.invitations.length} 位候选发送邀请。`
-      : `你已加入“${result.activity.title}”，可以在活动页查看安排。`;
+    elements.successTitle.textContent =
+      result.status === "joined" ? "已加入活动" : createSoloActivity ? "活动已发布" : "搭子局已创建";
+    elements.successCopy.textContent = createSoloActivity
+      ? `“${result.activity.title}”现在由你先占一席，其他同学可以在匹配时加入。`
+      : result.invitations.length
+        ? `“${result.activity.title}”已创建，并向 ${result.invitations.length} 位候选发送邀请。`
+        : `你已加入“${result.activity.title}”，可以在“我的活动”查看安排。`;
     setResultView("success");
     loadInvitations(true);
+    loadActivities(true);
   } catch (error) {
     showInlineError(elements.matchError, error.message);
   } finally {
-    setButtonLoading(elements.confirmButton, false);
+    setButtonLoading(actionButton, false);
   }
 }
 
@@ -576,43 +645,229 @@ async function respondInvitation(event) {
       body: JSON.stringify({ decision: button.dataset.decision }),
     });
     showToast(button.dataset.decision === "accepted" ? "已接受邀请" : "已拒绝邀请");
-    await loadInvitations();
+    await Promise.all([loadInvitations(), loadActivities(true)]);
   } catch (error) {
     showToast(error.message);
     setButtonLoading(button, false);
   }
 }
 
-async function loadActivities() {
-  elements.activityList.innerHTML = `<div class="empty-list">正在读取活动…</div>`;
+function activityStatusLabel(status, membershipStatus) {
+  if (membershipStatus === "withdrawn") return ["已退出", "is-muted"];
+  const labels = {
+    open: ["等搭子加入", ""],
+    formed: ["搭子已就位", "is-success"],
+    completed: ["已结束", "is-muted"],
+    cancelled: ["已取消", "is-muted"],
+  };
+  return labels[status] || [status, "is-muted"];
+}
+
+async function loadActivities(silent = false) {
+  if (!state.token) return;
+  if (!silent) elements.activityList.innerHTML = `<div class="empty-list">正在翻开你的活动本…</div>`;
   try {
-    const activities = await api("/activities?limit=50");
-    renderActivities(activities);
+    const [activities, peerTasks] = await Promise.all([
+      api("/activities/mine"),
+      api("/feedback/peer-review-tasks"),
+    ]);
+    state.activities = activities;
+    state.peerTasks = peerTasks;
+    const reviewCount = activities.filter((item) => item.needs_feedback).length;
+    elements.activityBadge.textContent = String(reviewCount);
+    elements.activityBadge.classList.toggle("is-hidden", reviewCount === 0);
+    renderActivities();
+    renderPeerReviewTasks();
   } catch (error) {
-    elements.activityList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+    if (!silent) elements.activityList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
   }
 }
 
-function renderActivities(activities) {
+function filteredActivities() {
+  const now = Date.now();
+  if (state.activityFilter === "review") {
+    return state.activities.filter((item) => item.needs_feedback);
+  }
+  if (state.activityFilter === "history") {
+    return state.activities.filter(
+      (item) => new Date(item.activity.ends_at).getTime() <= now || item.membership_status !== "confirmed",
+    );
+  }
+  return state.activities.filter(
+    (item) => new Date(item.activity.ends_at).getTime() > now && item.membership_status === "confirmed",
+  );
+}
+
+function renderActivities() {
+  const activities = filteredActivities();
   if (!activities.length) {
-    elements.activityList.innerHTML = `<div class="empty-list">还没有活动。回到“找搭子”创建第一个搭子局。</div>`;
+    const emptyCopy = {
+      upcoming: "接下来还没有安排。去“找搭子”发起一场，给日程添点新鲜事。",
+      review: "没有欠下的评价，干干净净。活动结束后，这里会提醒你写几句。",
+      history: "活动足迹还是空的，第一场正在等你。",
+    }[state.activityFilter];
+    elements.activityList.innerHTML = `<div class="empty-list empty-list-playful"><strong>${escapeHtml(emptyCopy)}</strong></div>`;
     return;
   }
   elements.activityList.innerHTML = activities
-    .map((activity) => {
-      const formed = activity.status === "formed";
-      return `<article class="list-card">
-        <div>
+    .map((item) => {
+      const activity = item.activity;
+      const [statusText, statusClass] = activityStatusLabel(activity.status, item.membership_status);
+      const roleText = item.role === "owner" ? "我发起的" : "我参加的";
+      const leaveAction = item.can_leave
+        ? `<button class="button button-text-danger" type="button" data-leave-activity="${escapeHtml(activity.id)}">退出活动</button>`
+        : "";
+      const feedbackActions = item.feedback_targets
+        .map(
+          (target) => `<button class="button button-accent" type="button" data-feedback-activity="${escapeHtml(activity.id)}" data-feedback-user="${escapeHtml(target.id)}">评价 ${escapeHtml(target.display_name)}</button>`,
+        )
+        .join("");
+      const policy = item.can_leave
+        ? `<p class="leave-hint">${escapeHtml(item.leave_policy_message)}</p>`
+        : "";
+      return `<article class="activity-card ${item.needs_feedback ? "needs-review" : ""}">
+        <div class="activity-date-tile" aria-hidden="true">
+          <strong>${new Date(activity.starts_at).getDate()}</strong>
+          <span>${new Intl.DateTimeFormat("zh-CN", { month: "short" }).format(new Date(activity.starts_at))}</span>
+        </div>
+        <div class="activity-card-main">
           <div class="candidate-title-row">
-            <h2>${escapeHtml(activity.title)}</h2>
-            <span class="status-label ${formed ? "is-success" : ""}">${formed ? "已成局" : "招募中"}</span>
+            <div><span class="activity-role">${roleText}</span><h2>${escapeHtml(activity.title)}</h2></div>
+            <span class="status-label ${statusClass}">${escapeHtml(statusText)}</span>
           </div>
-          <p>${escapeHtml(formatDate(activity.starts_at))} · ${escapeHtml(activity.location)}</p>
-          <p>${escapeHtml(activity.category)} · ${activity.participant_count}/${activity.capacity} 人</p>
+          <p class="activity-meta"><b>${escapeHtml(formatDate(activity.starts_at))}</b><span>${escapeHtml(activity.location)}</span><span>${escapeHtml(activity.category)} · ${activity.participant_count}/${activity.capacity} 人</span></p>
+          ${policy}
+          ${item.needs_feedback ? `<div class="review-callout"><strong>趁记忆还热，给搭子留一句真实反馈</strong><span>审核 Agent 会先检查，不会直接凭一条评价重罚。</span></div>` : ""}
+          <div class="activity-actions">${feedbackActions}${leaveAction}</div>
         </div>
       </article>`;
     })
     .join("");
+}
+
+function openLeaveDialog(activityId) {
+  const item = state.activities.find((entry) => entry.activity.id === activityId);
+  if (!item) return;
+  state.pendingLeave = item;
+  elements.leaveDialogTitle.textContent = `退出“${item.activity.title}”？`;
+  elements.leaveDialogCopy.textContent = item.leave_policy_message;
+  elements.leavePenaltyCard.classList.toggle("is-zero", item.leave_penalty === 0);
+  elements.leavePenaltyCard.innerHTML = item.leave_penalty
+    ? `<strong>-${item.leave_penalty}</strong><span>搭子信用分</span>`
+    : `<strong>0</strong><span>现在退出不扣分</span>`;
+  elements.leaveDialog.showModal();
+}
+
+async function confirmLeaveActivity() {
+  if (!state.pendingLeave) return;
+  setButtonLoading(elements.confirmLeaveButton, true, "正在退出…");
+  try {
+    const result = await api(`/activities/${state.pendingLeave.activity.id}/leave`, {
+      method: "POST",
+      body: JSON.stringify({ confirm_penalty: true }),
+    });
+    elements.leaveDialog.close();
+    state.pendingLeave = null;
+    showToast(result.message);
+    await Promise.all([loadCurrentUser(), loadActivities()]);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setButtonLoading(elements.confirmLeaveButton, false);
+  }
+}
+
+function openFeedbackDialog(activityId, userId) {
+  const item = state.activities.find((entry) => entry.activity.id === activityId);
+  const target = item?.feedback_targets.find((user) => user.id === userId);
+  if (!item || !target) return;
+  elements.feedbackForm.reset();
+  hideInlineError(elements.feedbackError);
+  elements.feedbackForm.elements.activity_id.value = activityId;
+  elements.feedbackForm.elements.reviewee_id.value = userId;
+  elements.feedbackDialogTitle.textContent = `这次和 ${target.display_name} 搭得怎么样？`;
+  elements.feedbackDialog.showModal();
+}
+
+async function submitFeedback(event) {
+  event.preventDefault();
+  hideInlineError(elements.feedbackError);
+  const button = event.submitter;
+  const form = new FormData(elements.feedbackForm);
+  const payload = {
+    activity_id: form.get("activity_id"),
+    reviewee_id: form.get("reviewee_id"),
+    attendance: form.get("attendance"),
+    rating: Number(form.get("rating")),
+    comment: String(form.get("comment") || "").trim() || null,
+    personality_tags: form.getAll("personality_tags"),
+    incident_tags: form.getAll("incident_tags"),
+  };
+  setButtonLoading(button, true, "Agent 正在审核…");
+  try {
+    const result = await api("/feedback", { method: "POST", body: JSON.stringify(payload) });
+    elements.feedbackDialog.close();
+    showToast(result.requires_peer_review ? "已提交，正在等待同场第三人复核" : result.ai_summary);
+    await Promise.all([loadCurrentUser(), loadActivities()]);
+  } catch (error) {
+    showInlineError(elements.feedbackError, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+function renderPeerReviewTasks() {
+  elements.peerReviewSection.classList.toggle("is-hidden", state.peerTasks.length === 0);
+  elements.peerTaskCount.textContent = `${state.peerTasks.length} 条`;
+  elements.peerReviewList.innerHTML = state.peerTasks
+    .map(
+      (task) => `<article class="peer-task-card">
+        <div><span class="activity-role">${escapeHtml(task.activity.title)}</span><h3>${escapeHtml(task.author.display_name)} 对 ${escapeHtml(task.subject.display_name)} 的评价</h3></div>
+        <blockquote>“${escapeHtml(task.comment || "没有填写文字说明") }”</blockquote>
+        <p>${escapeHtml(task.ai_summary)}</p>
+        <button class="button button-primary" type="button" data-peer-task="${escapeHtml(task.feedback_id)}">我来补充现场情况</button>
+      </article>`,
+    )
+    .join("");
+}
+
+function openPeerReviewDialog(feedbackId) {
+  const task = state.peerTasks.find((item) => item.feedback_id === feedbackId);
+  if (!task) return;
+  elements.peerReviewForm.reset();
+  hideInlineError(elements.peerReviewError);
+  elements.peerReviewForm.elements.feedback_id.value = feedbackId;
+  elements.peerDialogTitle.textContent = `${task.activity.title} · 帮忙还原情况`;
+  elements.peerDialogContext.textContent = `${task.author.display_name} 给 ${task.subject.display_name} 打了 ${task.rating} 分。${task.ai_summary}`;
+  elements.peerReviewDialog.showModal();
+}
+
+async function submitPeerReview(event) {
+  event.preventDefault();
+  hideInlineError(elements.peerReviewError);
+  const button = event.submitter;
+  const form = new FormData(elements.peerReviewForm);
+  const feedbackId = form.get("feedback_id");
+  const payload = {
+    verdict: form.get("verdict"),
+    true_parts: String(form.get("true_parts") || "").trim() || null,
+    false_parts: String(form.get("false_parts") || "").trim() || null,
+    comment: String(form.get("comment") || "").trim() || null,
+  };
+  setButtonLoading(button, true, "Agent 正在综合判断…");
+  try {
+    const result = await api(`/feedback/${feedbackId}/peer-review`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    elements.peerReviewDialog.close();
+    showToast(result.ai_summary);
+    await Promise.all([loadCurrentUser(), loadActivities()]);
+  } catch (error) {
+    showInlineError(elements.peerReviewError, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
 }
 
 function populateProfileForm() {
@@ -674,6 +929,8 @@ function bindEvents() {
   document.querySelector("#register-tab").addEventListener("click", () => switchAuthPanel("register"));
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.registerForm.addEventListener("submit", handleRegister);
+  document.querySelector("#register-next").addEventListener("click", continueRegistration);
+  document.querySelector("#register-back").addEventListener("click", () => showRegisterStep("account"));
   document.querySelector("#logout-button").addEventListener("click", () => logout());
 
   document.querySelectorAll(".demo-account").forEach((button) => {
@@ -701,9 +958,49 @@ function bindEvents() {
   document.querySelector("#new-match-button").addEventListener("click", resetMatchResult);
   document.querySelector("#start-another-button").addEventListener("click", resetMatchResult);
   elements.candidateList.addEventListener("click", handleCandidateSelection);
-  elements.confirmButton.addEventListener("click", confirmMatch);
+  elements.confirmButton.addEventListener("click", () => confirmMatch(false));
+  document.querySelector("#create-solo-button").addEventListener("click", () => confirmMatch(true));
   elements.invitationList.addEventListener("click", respondInvitation);
+  elements.activityList.addEventListener("click", (event) => {
+    const leaveButton = event.target.closest("[data-leave-activity]");
+    if (leaveButton) openLeaveDialog(leaveButton.dataset.leaveActivity);
+    const feedbackButton = event.target.closest("[data-feedback-activity]");
+    if (feedbackButton) {
+      openFeedbackDialog(feedbackButton.dataset.feedbackActivity, feedbackButton.dataset.feedbackUser);
+    }
+  });
+  elements.confirmLeaveButton.addEventListener("click", confirmLeaveActivity);
+  elements.feedbackForm.addEventListener("submit", submitFeedback);
+  elements.peerReviewList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-peer-task]");
+    if (button) openPeerReviewDialog(button.dataset.peerTask);
+  });
+  elements.peerReviewForm.addEventListener("submit", submitPeerReview);
   elements.profileForm.addEventListener("submit", saveProfile);
+
+  document.querySelectorAll("[data-activity-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.activityFilter = button.dataset.activityFilter;
+      document.querySelectorAll("[data-activity-filter]").forEach((item) => {
+        item.classList.toggle("is-active", item === button);
+      });
+      renderActivities();
+    });
+  });
+
+  document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+    button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
+  });
+  document.querySelectorAll(".tag-field input[type='checkbox']").forEach((input) => {
+    input.addEventListener("change", () => {
+      const group = input.closest(".tag-field");
+      const checked = group.querySelectorAll("input:checked");
+      if (checked.length > 4) {
+        input.checked = false;
+        showToast("每组最多选 4 个，挑最有代表性的就好");
+      }
+    });
+  });
 
   document.querySelector("input[name='custom_category']").addEventListener("input", (event) => {
     if (event.target.value.trim()) {

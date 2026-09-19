@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import httpx
+from sqlalchemy import select
 
+from app.models import Activity as ActivityModel
+from app.models import ActivityMember, User
 from tests.conftest import register_user
 
 
@@ -157,6 +160,45 @@ async def test_agent_preview_confirmation_invitation_and_feedback(
     assert activity["status"] == "formed"
     assert activity["participant_count"] == 2
 
+    feedback_too_early = await client.post(
+        "/api/v1/feedback",
+        headers=owner_headers,
+        json={
+            "activity_id": activity["id"],
+            "reviewee_id": best["id"],
+            "attendance": "no_show",
+            "rating": 1,
+            "comment": "没有出现，也没有提前说明",
+        },
+    )
+    assert feedback_too_early.status_code == 409
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        stored_activity = await session.get(ActivityModel, activity["id"])
+        stored_other = await session.scalar(
+            select(User).where(User.email == "other@njust.edu.cn")
+        )
+        assert stored_activity is not None
+        assert stored_other is not None
+        stored_activity.starts_at = datetime.now(UTC) - timedelta(hours=2)
+        stored_activity.ends_at = datetime.now(UTC) - timedelta(hours=1)
+        session.add(
+            ActivityMember(
+                activity_id=stored_activity.id,
+                user_id=stored_other.id,
+                role="participant",
+                status="confirmed",
+            )
+        )
+        await session.commit()
+
+    mine = await client.get("/api/v1/activities/mine", headers=owner_headers)
+    assert mine.status_code == 200
+    ended = next(item for item in mine.json() if item["activity"]["id"] == activity["id"])
+    assert ended["activity"]["status"] == "completed"
+    assert ended["needs_feedback"] is True
+
     feedback = await client.post(
         "/api/v1/feedback",
         headers=owner_headers,
@@ -165,12 +207,74 @@ async def test_agent_preview_confirmation_invitation_and_feedback(
             "reviewee_id": best["id"],
             "attendance": "no_show",
             "rating": 1,
-            "comment": "未到场",
+            "comment": "没有出现，也没有提前说明",
+            "personality_tags": ["quiet"],
+            "incident_tags": ["no_show"],
         },
     )
     assert feedback.status_code == 201, feedback.text
-    assert feedback.json()["reviewee_credit_delta"] == -8
-    assert feedback.json()["reviewee_credit_score"] == 92
+    assert feedback.json()["requires_peer_review"] is True
+    assert feedback.json()["reviewee_credit_delta"] == 0
+
+    tasks = await client.get("/api/v1/feedback/peer-review-tasks", headers=other_headers)
+    assert tasks.status_code == 200
+    assert tasks.json()[0]["feedback_id"] == feedback.json()["feedback_id"]
+    peer_review = await client.post(
+        f"/api/v1/feedback/{feedback.json()['feedback_id']}/peer-review",
+        headers=other_headers,
+        json={
+            "verdict": "mostly_true",
+            "comment": "我也在现场，确实一直没有见到他。",
+            "true_parts": "未到场",
+            "false_parts": "",
+        },
+    )
+    assert peer_review.status_code == 201, peer_review.text
+    assert peer_review.json()["reviewee_credit_delta"] == -9
+
+    async with app.state.database.session_factory() as session:
+        reviewed_user = await session.get(User, best["id"])
+        assert reviewed_user is not None
+        assert reviewed_user.credit_score == 91
+        assert reviewed_user.hidden_profile["finalized_feedback_count"] == 1
+
+    other_user = await client.get("/api/v1/users/me", headers=other_headers)
+    disputed = await client.post(
+        "/api/v1/feedback",
+        headers=owner_headers,
+        json={
+            "activity_id": activity["id"],
+            "reviewee_id": other_user.json()["id"],
+            "attendance": "no_show",
+            "rating": 1,
+            "comment": "他说没来，但这是一条用于检验恶意评价识别的指控。",
+            "incident_tags": ["no_show"],
+        },
+    )
+    assert disputed.status_code == 201
+    rejected_claim = await client.post(
+        f"/api/v1/feedback/{disputed.json()['feedback_id']}/peer-review",
+        headers=best_headers,
+        json={
+            "verdict": "mostly_false",
+            "comment": "他全程都在，原评价的主要事实不成立。",
+            "true_parts": "",
+            "false_parts": "未到场",
+        },
+    )
+    assert rejected_claim.status_code == 201, rejected_claim.text
+    assert rejected_claim.json()["reviewee_credit_delta"] == 0
+    assert rejected_claim.json()["original_reviewer_credit_delta"] == -3
+
+    async with app.state.database.session_factory() as session:
+        original_reviewer = await session.get(User, owner["id"])
+        falsely_reviewed = await session.get(User, other_user.json()["id"])
+        assert original_reviewer is not None
+        assert falsely_reviewed is not None
+        assert original_reviewer.hidden_profile["review_integrity"][
+            "unsupported_serious_feedback_count"
+        ] == 1
+        assert falsely_reviewed.hidden_profile["finalized_feedback_count"] == 0
 
     after_confirm = await client.get(
         f"/api/v1/agent-runs/{preview_body['agent_run_id']}",
@@ -182,6 +286,82 @@ async def test_agent_preview_confirmation_invitation_and_feedback(
     assert confirmation_events
     assert "invite_user" in confirmation_events[0]["approved_tools"]
     assert owner["id"] != best["id"]
+
+
+async def test_guided_registration_solo_activity_and_timed_leave(
+    client: httpx.AsyncClient,
+) -> None:
+    registration = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "guided@njust.edu.cn",
+            "password": "test-password-123",
+            "display_name": "画像用户",
+            "university": "南京理工大学",
+            "campus": "江阴校区",
+            "department": "设计艺术与传媒学院",
+            "grade_year": 3,
+            "bio": "喜欢有计划地参加活动",
+            "interests": ["摄影", "羽毛球"],
+            "preferred_locations": ["图书馆"],
+            "social_style": "balanced",
+            "preferred_group_min": 2,
+            "preferred_group_max": 5,
+        },
+    )
+    assert registration.status_code == 201, registration.text
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+    me = await client.get("/api/v1/users/me", headers=headers)
+    assert me.json()["department"] == "设计艺术与传媒学院"
+    assert me.json()["interests"] == ["摄影", "羽毛球"]
+    assert "hidden_profile" not in me.json()
+
+    starts_at = datetime.now(UTC) + timedelta(hours=12)
+    preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=headers,
+        json={
+            "category": "摄影",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + timedelta(hours=2)).isoformat(),
+            "location": "图书馆",
+            "people_needed": 2,
+            "title": "校园夜景拍摄",
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    confirmed = await client.post(
+        f"/api/v1/matches/{preview.json()['match_request_id']}/confirm",
+        headers=headers,
+        json={"create_solo_activity": True},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["invitations"] == []
+    assert confirmed.json()["activity"]["participant_count"] == 1
+
+    mine = await client.get("/api/v1/activities/mine", headers=headers)
+    mine_item = next(
+        item
+        for item in mine.json()
+        if item["activity"]["id"] == confirmed.json()["activity"]["id"]
+    )
+    assert mine_item["can_leave"] is True
+    assert mine_item["leave_penalty"] == 2
+
+    unconfirmed_leave = await client.post(
+        f"/api/v1/activities/{confirmed.json()['activity']['id']}/leave",
+        headers=headers,
+        json={"confirm_penalty": False},
+    )
+    assert unconfirmed_leave.status_code == 409
+    leave = await client.post(
+        f"/api/v1/activities/{confirmed.json()['activity']['id']}/leave",
+        headers=headers,
+        json={"confirm_penalty": True},
+    )
+    assert leave.status_code == 200, leave.text
+    assert leave.json()["credit_delta"] == -2
+    assert leave.json()["credit_score"] == 98
 
 
 async def test_sensitive_personalization_is_not_used_for_ranking(client: httpx.AsyncClient) -> None:

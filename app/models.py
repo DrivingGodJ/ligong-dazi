@@ -82,6 +82,10 @@ class User(Base, TimestampMixin):
     preferred_group_min: Mapped[int] = mapped_column(Integer, default=2)
     preferred_group_max: Mapped[int] = mapped_column(Integer, default=6)
     credit_score: Mapped[int] = mapped_column(Integer, default=100, index=True)
+    hidden_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    hidden_profile_updated_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime(), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
@@ -109,6 +113,9 @@ class Activity(Base, TimestampMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     personal_requirement: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="open", index=True)
+    post_activity_processed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime(), nullable=True
+    )
 
 
 class ActivityMember(Base):
@@ -123,6 +130,8 @@ class ActivityMember(Base):
     role: Mapped[str] = mapped_column(String(30), default="participant")
     status: Mapped[str] = mapped_column(String(30), default="confirmed")
     joined_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    left_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    leave_penalty: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class MatchRequest(Base, TimestampMixin):
@@ -234,6 +243,37 @@ class Feedback(Base):
     attendance: Mapped[str] = mapped_column(String(30))
     rating: Mapped[int] = mapped_column(Integer)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    personality_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    incident_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    moderation_status: Mapped[str] = mapped_column(
+        String(40), default="reviewing", index=True
+    )
+    ai_authenticity: Mapped[float] = mapped_column(Float, default=0.5)
+    ai_malicious_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    ai_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requires_peer_review: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    reviewee_credit_delta: Mapped[int] = mapped_column(Integer, default=0)
+    reviewer_credit_delta: Mapped[int] = mapped_column(Integer, default=0)
+    finalized_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class PeerFeedbackReview(Base):
+    __tablename__ = "peer_feedback_reviews"
+    __table_args__ = (
+        UniqueConstraint("feedback_id", "reviewer_id", name="uq_peer_feedback_reviewer"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    feedback_id: Mapped[str] = mapped_column(
+        ForeignKey("feedback.id", ondelete="CASCADE"), index=True
+    )
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    verdict: Mapped[str] = mapped_column(String(30))
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    true_parts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    false_parts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewer_credit_delta: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 

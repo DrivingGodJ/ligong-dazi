@@ -83,6 +83,30 @@ TOOL_CATALOG = [
         "requires_confirmation": True,
     },
     {
+        "name": "leave_activity",
+        "description": "按距离活动开始的时间计算后果，并在用户再次确认后退出活动",
+        "effect": "write",
+        "requires_confirmation": True,
+    },
+    {
+        "name": "review_feedback",
+        "description": "结合结构化标签、文字、同场评价和历史信誉审核评价真实性",
+        "effect": "write",
+        "requires_confirmation": False,
+    },
+    {
+        "name": "request_peer_review",
+        "description": "高影响或相互矛盾的评价交给同场第三位参与者复核",
+        "effect": "write",
+        "requires_confirmation": False,
+    },
+    {
+        "name": "analyze_hidden_profile",
+        "description": "活动结束后汇总用户活动习惯、社交信号与履约表现到隐藏画像",
+        "effect": "write",
+        "requires_confirmation": False,
+    },
+    {
         "name": "update_credit",
         "description": "根据可审计的履约事件更新搭子信用",
         "effect": "write",

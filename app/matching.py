@@ -188,10 +188,19 @@ def score_user_candidate(
 ) -> ScoredCandidate:
     requester_interests = {normalize(item) for item in context.requester.interests}
     candidate_interests = {normalize(item) for item in candidate.interests}
+    learned_profile = candidate.hidden_profile or {}
+    learned_categories = {
+        normalize(str(item.get("category", "")))
+        for item in learned_profile.get("activity_signals", [])
+        if isinstance(item, dict)
+    }
 
     activity_score = 100.0 if normalize(context.category) in candidate_interests else 75.0
     if context.category in candidate.interests:
         activity_score = 100.0
+    learned_activity_match = normalize(context.category) in learned_categories
+    if learned_activity_match:
+        activity_score = min(100.0, activity_score + 10.0)
 
     location = normalize(context.location)
     preferred_locations = [normalize(item) for item in candidate.preferred_locations]
@@ -225,9 +234,19 @@ def score_user_candidate(
         group_score = max(40.0, 100.0 - distance * 15.0)
 
     target_style = personalization.preferred_style or context.requester.social_style
-    if candidate.social_style == target_style:
+    learned_traits = learned_profile.get("personality_signals", [])
+    learned_style = next(
+        (
+            str(item.get("key"))
+            for item in learned_traits
+            if isinstance(item, dict) and item.get("key") in {"quiet", "balanced", "outgoing"}
+        ),
+        None,
+    )
+    effective_style = learned_style or candidate.social_style
+    if effective_style == target_style:
         social_score = 100.0
-    elif "balanced" in (candidate.social_style, target_style):
+    elif "balanced" in (effective_style, target_style):
         social_score = 85.0
     else:
         social_score = 65.0
@@ -266,9 +285,11 @@ def score_user_candidate(
         explanation.append("符合你提出的同年级偏好")
     if (
         personalization.preferred_style
-        and candidate.social_style == personalization.preferred_style
+        and effective_style == personalization.preferred_style
     ):
         explanation.append("社交方式符合个性化需求")
+    if learned_activity_match:
+        explanation.append("过往活动习惯与本次需求相符")
 
     return ScoredCandidate(
         candidate_type="user",

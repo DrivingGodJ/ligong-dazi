@@ -23,6 +23,26 @@ class RegisterRequest(ApiModel):
     password: str = Field(min_length=8, max_length=128)
     display_name: str = Field(min_length=1, max_length=80)
     university: str = Field(default="南京理工大学", min_length=2, max_length=120)
+    campus: str | None = Field(default=None, max_length=80)
+    department: str | None = Field(default=None, max_length=120)
+    grade_year: int | None = Field(default=None, ge=1, le=8)
+    bio: str | None = Field(default=None, max_length=500)
+    interests: list[str] = Field(default_factory=list, max_length=30)
+    preferred_locations: list[str] = Field(default_factory=list, max_length=30)
+    social_style: Literal["quiet", "balanced", "outgoing"] = "balanced"
+    preferred_group_min: int = Field(default=2, ge=2, le=30)
+    preferred_group_max: int = Field(default=6, ge=2, le=30)
+
+    @field_validator("interests", "preferred_locations")
+    @classmethod
+    def clean_registration_lists(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @model_validator(mode="after")
+    def validate_registration_group_range(self) -> RegisterRequest:
+        if self.preferred_group_min > self.preferred_group_max:
+            raise ValueError("preferred_group_min 不能大于 preferred_group_max")
+        return self
 
 
 class LoginRequest(ApiModel):
@@ -187,13 +207,19 @@ class MatchPreviewResponse(ApiModel):
 class MatchConfirmRequest(ApiModel):
     candidate_user_ids: list[str] = Field(default_factory=list, max_length=20)
     existing_activity_id: str | None = None
+    create_solo_activity: bool = False
 
     @model_validator(mode="after")
     def validate_selection(self) -> MatchConfirmRequest:
-        if not self.candidate_user_ids and not self.existing_activity_id:
-            raise ValueError("至少选择一位推荐用户或一个已有活动")
-        if self.candidate_user_ids and self.existing_activity_id:
-            raise ValueError("不能同时选择推荐用户和已有活动")
+        selected_modes = sum(
+            [
+                bool(self.candidate_user_ids),
+                bool(self.existing_activity_id),
+                self.create_solo_activity,
+            ]
+        )
+        if selected_modes != 1:
+            raise ValueError("请选择邀请搭子、加入已有活动或创建单人活动中的一种")
         if len(set(self.candidate_user_ids)) != len(self.candidate_user_ids):
             raise ValueError("candidate_user_ids 不能重复")
         return self
@@ -225,12 +251,71 @@ class InvitationRespondRequest(ApiModel):
     decision: Literal["accepted", "rejected"]
 
 
+class MyActivityItem(ApiModel):
+    activity: ActivityPublic
+    role: Literal["owner", "participant"]
+    membership_status: str
+    joined_at: datetime
+    left_at: datetime | None
+    can_leave: bool
+    leave_penalty: int
+    leave_policy_message: str
+    needs_feedback: bool
+    feedback_targets: list[UserPublic] = Field(default_factory=list)
+
+
+class ActivityLeaveRequest(ApiModel):
+    confirm_penalty: bool = False
+
+
+class ActivityLeaveResult(ApiModel):
+    activity_id: str
+    membership_status: str
+    credit_delta: int
+    credit_score: int
+    message: str
+
+
+PersonalityTag = Literal[
+    "quiet",
+    "balanced",
+    "outgoing",
+    "patient",
+    "talkative",
+    "focused",
+    "easygoing",
+    "organized",
+]
+
+IncidentTag = Literal[
+    "punctual",
+    "helpful",
+    "clear_communication",
+    "late",
+    "cancelled",
+    "no_show",
+    "unsafe_behavior",
+]
+
+
 class FeedbackCreate(ApiModel):
     activity_id: str
     reviewee_id: str
     attendance: Literal["attended", "cancelled_early", "late_cancel", "no_show"]
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=500)
+    personality_tags: list[PersonalityTag] = Field(default_factory=list, max_length=4)
+    incident_tags: list[IncidentTag] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode="after")
+    def validate_feedback_evidence(self) -> FeedbackCreate:
+        if self.attendance == "no_show" and "no_show" not in self.incident_tags:
+            self.incident_tags.append("no_show")
+        if "no_show" in self.incident_tags and self.attendance != "no_show":
+            raise ValueError("选择“被放鸽子”时，到场情况也应选择“没有出现”")
+        if "punctual" in self.incident_tags and self.attendance == "no_show":
+            raise ValueError("“准时到场”和“没有出现”不能同时选择")
+        return self
 
 
 class FeedbackResult(ApiModel):
@@ -239,6 +324,38 @@ class FeedbackResult(ApiModel):
     reviewee_credit_delta: int
     reviewer_credit_score: int
     reviewer_credit_delta: int
+    moderation_status: str
+    requires_peer_review: bool
+    ai_summary: str
+
+
+class PeerReviewTask(ApiModel):
+    feedback_id: str
+    activity: ActivityPublic
+    author: UserPublic
+    subject: UserPublic
+    attendance: str
+    rating: int
+    comment: str | None
+    personality_tags: list[str]
+    incident_tags: list[str]
+    ai_summary: str
+
+
+class PeerReviewCreate(ApiModel):
+    verdict: Literal["mostly_true", "partly_true", "not_sure", "mostly_false"]
+    comment: str | None = Field(default=None, max_length=500)
+    true_parts: str | None = Field(default=None, max_length=500)
+    false_parts: str | None = Field(default=None, max_length=500)
+
+
+class PeerReviewResult(ApiModel):
+    feedback_id: str
+    moderation_status: str
+    reviewee_credit_delta: int
+    original_reviewer_credit_delta: int
+    peer_reviewer_credit_delta: int
+    ai_summary: str
 
 
 class AgentRunPublic(ApiModel):
