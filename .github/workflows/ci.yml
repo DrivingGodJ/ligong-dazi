@@ -1,0 +1,38 @@
+name: 自动检查
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 代码规范与测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载代码
+        uses: actions/checkout@v7
+
+      - name: 准备 Python 和 uv
+        uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: 安装依赖
+        run: uv sync --locked --dev
+
+      - name: 检查 Python 代码
+        run: uv run ruff check .
+
+      - name: 运行后端测试
+        run: uv run pytest -q
+
+      - name: 检查前端脚本
+        run: |
+          node --check web/app.js
+          node --check web/admin.js

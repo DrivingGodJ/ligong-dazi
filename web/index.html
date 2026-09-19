@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="理工搭子局：提交活动需求，让 AI Agent 查询候选、解释匹配并在确认后完成组局。"
+    />
+    <meta name="theme-color" content="#6436c8" />
+    <title>理工搭子局</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/styles.css?v=2" />
+    <script src="/static/app.js?v=2" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+    <header class="app-header">
+      <a class="brand" href="/" aria-label="理工搭子局首页">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36" role="img">
+            <circle cx="10" cy="18" r="5"></circle>
+            <circle cx="26" cy="10" r="5"></circle>
+            <circle cx="26" cy="26" r="5"></circle>
+            <path d="M14.5 16.2 21.5 12.3M14.5 19.8l7 3.9"></path>
+          </svg>
+        </span>
+        <span>
+          <strong>理工搭子局</strong>
+          <small>找到刚刚好的搭子</small>
+        </span>
+      </a>
+
+      <nav id="main-nav" class="main-nav is-hidden" aria-label="主要功能">
+        <button class="nav-button is-active" type="button" data-tab="match">找搭子</button>
+        <button class="nav-button" type="button" data-tab="invitations">
+          收到的邀请
+          <span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span>
+        </button>
+        <button class="nav-button" type="button" data-tab="activities">活动</button>
+        <button class="nav-button" type="button" data-tab="profile">我的画像</button>
+      </nav>
+
+      <div id="account-area" class="account-area is-hidden">
+        <span id="account-name" class="account-name"></span>
+        <a class="button button-quiet button-small" href="/admin">管理后台</a>
+        <button id="logout-button" class="button button-quiet button-small" type="button">退出</button>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section id="auth-view" class="auth-shell" aria-labelledby="auth-title">
+        <div class="auth-intro">
+          <p class="eyebrow">AI 搭子执行 Agent</p>
+          <h1 id="auth-title">说清需求，剩下的交给 Agent</h1>
+          <p>
+            它会查询已有活动和可用用户，计算每一项匹配分。只有你确认后，系统才会创建活动或发送邀请。
+          </p>
+          <ol class="auth-steps" aria-label="使用流程">
+            <li><span>1</span>填写时间、地点与个性化要求</li>
+            <li><span>2</span>查看候选和可解释匹配分</li>
+            <li><span>3</span>确认后再邀请和组局</li>
+          </ol>
+        </div>
+
+        <div class="auth-card">
+          <div class="segmented-control" role="tablist" aria-label="登录或注册">
+            <button
+              id="login-tab"
+              class="segment is-active"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="login-panel"
+            >
+              登录
+            </button>
+            <button
+              id="register-tab"
+              class="segment"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="register-panel"
+            >
+              注册
+            </button>
+          </div>
+
+          <div id="login-panel" role="tabpanel" aria-labelledby="login-tab">
+            <form id="login-form" class="form-stack">
+              <label>
+                邮箱
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                密码
+                <input name="password" type="password" autocomplete="current-password" minlength="8" required />
+              </label>
+              <button class="button button-primary button-wide" type="submit">登录并开始组局</button>
+            </form>
+
+            <div class="demo-login">
+              <div class="section-label">演示账号</div>
+              <p>先运行 README 中的演示数据脚本，然后可一键填入账号。</p>
+              <div class="demo-buttons">
+                <button class="demo-account" type="button" data-email="xiaozeng@njust.demo">
+                  小曾 · 发起人
+                </button>
+                <button class="demo-account" type="button" data-email="xiaowang@njust.demo">
+                  小王 · 候选人
+                </button>
+                <button class="demo-account" type="button" data-email="xiaoli@njust.demo">
+                  小李 · 候选人
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="register-panel" class="is-hidden" role="tabpanel" aria-labelledby="register-tab">
+            <form id="register-form" class="form-stack">
+              <label>
+                昵称
+                <input name="display_name" type="text" autocomplete="nickname" maxlength="80" required />
+              </label>
+              <label>
+                邮箱
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                密码
+                <input
+                  name="password"
+                  type="password"
+                  autocomplete="new-password"
+                  minlength="8"
+                  required
+                />
+                <span class="field-help">至少 8 位</span>
+              </label>
+              <button class="button button-primary button-wide" type="submit">注册并完善画像</button>
+            </form>
+          </div>
+          <p id="auth-error" class="form-error is-hidden" role="alert"></p>
+        </div>
+      </section>
+
+      <section id="app-view" class="app-shell is-hidden">
+        <section id="panel-match" class="tab-panel" data-panel="match" aria-labelledby="match-heading">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">新建匹配任务</p>
+              <h1 id="match-heading">这次想找什么搭子？</h1>
+            </div>
+            <div id="agent-mode-pill" class="mode-pill">
+              <span aria-hidden="true"></span>
+              规则 Agent
+            </div>
+          </div>
+
+          <div class="workbench">
+            <aside class="request-panel" aria-label="搭子需求">
+              <form id="match-form">
+                <fieldset class="form-section">
+                  <legend>活动类型</legend>
+                  <div class="choice-grid" id="category-choices">
+                    <label class="choice-chip"><input type="radio" name="category" value="羽毛球" checked /><span>羽毛球</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="篮球" /><span>篮球</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="跑步" /><span>跑步</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="自习" /><span>自习</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="吃饭" /><span>吃饭</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="电影" /><span>电影</span></label>
+                  </div>
+                  <label class="other-category">
+                    其他活动
+                    <input name="custom_category" type="text" maxlength="50" placeholder="例如：骑行" />
+                  </label>
+                </fieldset>
+
+                <div class="form-section two-columns">
+                  <label>
+                    开始时间
+                    <input id="starts-at" name="starts_at" type="datetime-local" required />
+                  </label>
+                  <label>
+                    结束时间
+                    <input id="ends-at" name="ends_at" type="datetime-local" required />
+                  </label>
+                </div>
+
+                <div class="form-section two-columns location-people">
+                  <label>
+                    地点
+                    <input name="location" type="text" maxlength="160" value="南区体育馆" required />
+                  </label>
+                  <label>
+                    还需要几人
+                    <select name="people_needed">
+                      <option value="1">1 人</option>
+                      <option value="2" selected>2 人</option>
+                      <option value="3">3 人</option>
+                      <option value="4">4 人</option>
+                      <option value="5">5 人</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label class="form-section">
+                  活动标题（选填）
+                  <input name="title" type="text" maxlength="120" placeholder="例如：今晚南区羽毛球" />
+                </label>
+
+                <label class="form-section requirement-field">
+                  个性化需求（选填）
+                  <textarea
+                    name="personal_requirement"
+                    rows="4"
+                    maxlength="500"
+                    placeholder="例如：希望找同院系、安静一点、守时且也喜欢羽毛球的搭子"
+                  ></textarea>
+                  <span class="field-help">Agent 会说明哪些要求已采用、哪些无法识别或不参与排序。</span>
+                </label>
+
+                <button id="match-submit" class="button button-primary button-wide" type="submit">
+                  让 Agent 帮我找
+                </button>
+              </form>
+            </aside>
+
+            <section class="result-panel" aria-label="Agent 匹配结果">
+              <div id="result-empty" class="empty-state">
+                <div class="empty-symbol" aria-hidden="true">
+                  <svg viewBox="0 0 64 64">
+                    <circle cx="20" cy="32" r="9"></circle>
+                    <circle cx="46" cy="20" r="7"></circle>
+                    <circle cx="46" cy="44" r="7"></circle>
+                    <path d="m28 28 11-5M28 36l11 5"></path>
+                  </svg>
+                </div>
+                <h2>等待你的需求</h2>
+                <p>提交后，这里会显示 Agent 的查询过程、候选搭子和每一项匹配理由。</p>
+              </div>
+
+              <div id="result-running" class="running-state is-hidden" aria-live="polite">
+                <div class="agent-orbit" aria-hidden="true"><span></span></div>
+                <p class="eyebrow">Agent 正在工作</p>
+                <h2 id="running-title">正在理解你的需求</h2>
+                <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
+                <ol class="agent-steps">
+                  <li id="step-activities"><span>1</span>查询已有活动</li>
+                  <li id="step-users"><span>2</span>寻找可用用户</li>
+                  <li id="step-score"><span>3</span>计算并解释匹配度</li>
+                </ol>
+              </div>
+
+              <div id="result-content" class="is-hidden">
+                <div class="result-header">
+                  <div>
+                    <p class="eyebrow">匹配完成</p>
+                    <h2>推荐结果</h2>
+                    <p id="result-summary" class="result-summary"></p>
+                  </div>
+                  <button id="new-match-button" class="button button-quiet" type="button">重新匹配</button>
+                </div>
+
+                <div id="agent-trace" class="trace-strip" aria-label="Agent 工具调用记录"></div>
+                <div id="personalization-report" class="notice-stack"></div>
+                <div id="candidate-list" class="candidate-list"></div>
+
+                <div id="confirm-bar" class="confirm-bar is-hidden">
+                  <div>
+                    <strong id="selection-summary">尚未选择候选</strong>
+                    <span>确认前不会发送邀请</span>
+                  </div>
+                  <button id="confirm-match-button" class="button button-accent" type="button">
+                    确认并执行
+                  </button>
+                </div>
+              </div>
+
+              <div id="result-success" class="success-state is-hidden" aria-live="polite">
+                <div class="success-mark" aria-hidden="true">
+                  <svg viewBox="0 0 48 48"><path d="m13 25 7 7 15-17"></path></svg>
+                </div>
+                <p class="eyebrow">操作完成</p>
+                <h2 id="success-title">搭子局已创建</h2>
+                <p id="success-copy"></p>
+                <div class="success-actions">
+                  <button class="button button-primary" type="button" data-go-tab="activities">查看活动</button>
+                  <button id="start-another-button" class="button button-quiet" type="button">再找一次</button>
+                </div>
+              </div>
+
+              <p id="match-error" class="form-error is-hidden" role="alert"></p>
+            </section>
+          </div>
+        </section>
+
+        <section id="panel-invitations" class="tab-panel is-hidden" data-panel="invitations" aria-labelledby="invitations-heading">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">需要你决定</p>
+              <h1 id="invitations-heading">收到的邀请</h1>
+            </div>
+            <button class="button button-quiet" type="button" data-refresh="invitations">刷新</button>
+          </div>
+          <div id="invitation-list" class="list-surface"></div>
+        </section>
+
+        <section id="panel-activities" class="tab-panel is-hidden" data-panel="activities" aria-labelledby="activities-heading">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">近期安排</p>
+              <h1 id="activities-heading">活动</h1>
+            </div>
+            <button class="button button-quiet" type="button" data-refresh="activities">刷新</button>
+          </div>
+          <div id="activity-list" class="list-surface"></div>
+        </section>
+
+        <section id="panel-profile" class="tab-panel is-hidden" data-panel="profile" aria-labelledby="profile-heading">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">匹配依据</p>
+              <h1 id="profile-heading">我的画像</h1>
+              <p class="heading-copy">这些信息只用于提高匹配质量，不会展示邮箱和密码。</p>
+            </div>
+            <div class="credit-card" aria-label="当前信用分">
+              <span>搭子信用</span>
+              <strong id="profile-credit">100</strong>
+            </div>
+          </div>
+
+          <form id="profile-form" class="profile-form">
+            <div class="profile-grid">
+              <label>
+                昵称
+                <input name="display_name" type="text" maxlength="80" required />
+              </label>
+              <label>
+                校区
+                <input name="campus" type="text" maxlength="80" placeholder="例如：南区" />
+              </label>
+              <label>
+                院系
+                <input name="department" type="text" maxlength="120" />
+              </label>
+              <label>
+                年级
+                <select name="grade_year">
+                  <option value="">暂不填写</option>
+                  <option value="1">大一</option>
+                  <option value="2">大二</option>
+                  <option value="3">大三</option>
+                  <option value="4">大四</option>
+                  <option value="5">研究生一年级</option>
+                  <option value="6">研究生二年级</option>
+                  <option value="7">研究生三年级</option>
+                </select>
+              </label>
+              <label>
+                兴趣
+                <input name="interests" type="text" placeholder="用逗号分隔，例如：羽毛球，摄影" />
+              </label>
+              <label>
+                常去地点
+                <input name="preferred_locations" type="text" placeholder="用逗号分隔" />
+              </label>
+              <label>
+                社交方式
+                <select name="social_style">
+                  <option value="quiet">偏安静</option>
+                  <option value="balanced">都可以</option>
+                  <option value="outgoing">偏外向</option>
+                </select>
+              </label>
+              <div class="group-range">
+                <label>
+                  偏好最少人数
+                  <input name="preferred_group_min" type="number" min="2" max="30" />
+                </label>
+                <label>
+                  偏好最多人数
+                  <input name="preferred_group_max" type="number" min="2" max="30" />
+                </label>
+              </div>
+            </div>
+            <label>
+              自我介绍
+              <textarea name="bio" rows="4" maxlength="500" placeholder="简单说说你的活动习惯"></textarea>
+            </label>
+            <div class="form-actions">
+              <p id="profile-status" class="save-status" aria-live="polite"></p>
+              <button class="button button-primary" type="submit">保存画像</button>
+            </div>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>

@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="理工搭子局本地管理后台：设置 AI 服务并查看易懂的 Agent 运行记录。" />
+    <meta name="theme-color" content="#6436c8" />
+    <title>管理后台 · 理工搭子局</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="stylesheet" href="/static/styles.css?v=3" />
+    <link rel="stylesheet" href="/static/admin.css?v=2" />
+    <script src="/static/admin.js?v=2" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#admin-content">跳到后台内容</a>
+    <header class="app-header admin-header">
+      <a class="brand" href="/" aria-label="返回理工搭子局用户端">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 36 36">
+            <circle cx="10" cy="18" r="5"></circle>
+            <circle cx="26" cy="10" r="5"></circle>
+            <circle cx="26" cy="26" r="5"></circle>
+            <path d="M14.5 16.2 21.5 12.3M14.5 19.8l7 3.9"></path>
+          </svg>
+        </span>
+        <span>
+          <strong>理工搭子局</strong>
+          <small>本地管理后台</small>
+        </span>
+      </a>
+
+      <nav class="admin-nav" aria-label="后台页面导航">
+        <a href="#overview">运行总览</a>
+        <a href="#ai-service">AI 服务</a>
+        <a href="#plain-logs">运行记录</a>
+      </nav>
+
+      <a class="button button-quiet button-small admin-back" href="/">返回用户端</a>
+    </header>
+
+    <main id="admin-content" class="admin-main">
+      <section id="overview" class="admin-hero" aria-labelledby="admin-title">
+        <div>
+          <p class="eyebrow">AI 搭子服务控制台</p>
+          <h1 id="admin-title">不用看代码，也能知道系统在做什么</h1>
+          <p class="admin-lead">
+            在这里选择 AI 服务、保存密钥，并用普通语言查看每次匹配是否成功、找到了多少候选以及是否启用了备用方案。
+          </p>
+        </div>
+        <div id="service-summary" class="service-summary is-loading" aria-live="polite">
+          <span class="service-status-dot" aria-hidden="true"></span>
+          <div>
+            <span>当前服务</span>
+            <strong id="service-status-label">正在读取…</strong>
+            <small id="service-provider-label">请稍候</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="metric-grid" aria-label="运行数据概览">
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+          </span>
+          <div><strong id="metric-users">—</strong><span>已注册同学</span></div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10M12 6v6l4 2" /></svg>
+          </span>
+          <div><strong id="metric-requests">—</strong><span>收到的匹配需求</span></div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m9 12 2 2 4-4M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z" /></svg>
+          </span>
+          <div><strong id="metric-completed">—</strong><span>已完成匹配</span></div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0" /></svg>
+          </span>
+          <div><strong id="metric-pending">—</strong><span>等待回应的邀请</span></div>
+        </article>
+      </section>
+
+      <section id="ai-service" class="admin-section" aria-labelledby="service-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">服务设置</p>
+            <h2 id="service-heading">选择谁来负责 AI 匹配</h2>
+            <p>只影响之后发起的匹配，不会改动已经生成的活动和邀请。</p>
+          </div>
+          <span id="saved-key-badge" class="key-badge">正在检查密钥…</span>
+        </div>
+
+        <div class="admin-layout">
+          <form id="ai-config-form" class="config-card" novalidate>
+            <fieldset class="provider-fieldset">
+              <legend>AI 服务商</legend>
+              <p class="field-intro">选择一个即可。纯规则模式不联网，也不会产生模型费用。</p>
+              <div class="provider-grid">
+                <label class="provider-card">
+                  <input type="radio" name="vendor" value="deepseek" />
+                  <span class="provider-choice">
+                    <span class="provider-monogram">DS</span>
+                    <span><strong>DeepSeek</strong><small>适合当前演示，支持 Agent 调用工具</small></span>
+                    <span class="choice-mark" aria-hidden="true"></span>
+                  </span>
+                </label>
+                <label class="provider-card">
+                  <input type="radio" name="vendor" value="openai" />
+                  <span class="provider-choice">
+                    <span class="provider-monogram is-dark">OA</span>
+                    <span><strong>OpenAI</strong><small>使用 OpenAI 官方 API 和模型</small></span>
+                    <span class="choice-mark" aria-hidden="true"></span>
+                  </span>
+                </label>
+                <label class="provider-card">
+                  <input type="radio" name="vendor" value="rules" />
+                  <span class="provider-choice">
+                    <span class="provider-monogram is-orange">R</span>
+                    <span><strong>纯规则模式</strong><small>无需 Key，适合离线演示和保底</small></span>
+                    <span class="choice-mark" aria-hidden="true"></span>
+                  </span>
+                </label>
+                <label class="provider-card">
+                  <input type="radio" name="vendor" value="custom" />
+                  <span class="provider-choice">
+                    <span class="provider-monogram is-soft">+</span>
+                    <span><strong>其他兼容服务</strong><small>填写自定义接口地址和模型名</small></span>
+                    <span class="choice-mark" aria-hidden="true"></span>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div id="api-fields" class="api-fields">
+              <label for="api-key">
+                API Key
+                <span class="secret-input-wrap">
+                  <input
+                    id="api-key"
+                    name="api_key"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    placeholder="填写新 Key；留空会继续使用已保存的 Key"
+                  />
+                  <button id="toggle-key-visibility" class="secret-toggle" type="button">显示</button>
+                </span>
+                <span id="key-help" class="field-help">密钥只保存在运行服务的这台电脑上，页面不会读取出原文。</span>
+              </label>
+
+              <label for="model-name">
+                所用模型
+                <input id="model-name" name="model" type="text" maxlength="120" spellcheck="false" />
+                <span class="field-help">一般保持默认即可；只有服务商要求时才修改。</span>
+              </label>
+
+              <details id="advanced-settings" class="advanced-settings">
+                <summary>高级设置</summary>
+                <label for="base-url">
+                  接口地址
+                  <input id="base-url" name="base_url" type="url" maxlength="500" spellcheck="false" />
+                </label>
+              </details>
+            </div>
+
+            <label class="fallback-row" for="fallback-enabled">
+              <span>
+                <strong>AI 暂时不可用时，自动使用备用规则</strong>
+                <small>推荐开启。即使余额不足或网络波动，用户仍能得到匹配结果。</small>
+              </span>
+              <input id="fallback-enabled" name="fallback_enabled" type="checkbox" role="switch" checked />
+            </label>
+
+            <p id="config-error" class="form-error is-hidden" role="alert"></p>
+            <div id="config-result" class="config-result is-hidden" aria-live="polite"></div>
+
+            <div class="config-actions">
+              <button id="test-connection" class="button" type="button">先测试连接</button>
+              <button id="save-config" class="button button-primary" type="submit">保存并立即使用</button>
+              <p>测试会向服务商发送一句很短的话，可能产生极少量费用。</p>
+            </div>
+          </form>
+
+          <aside class="explain-stack" aria-label="系统工作方式">
+            <article class="explain-card">
+              <div class="explain-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3v3M5.64 5.64l2.12 2.12M3 12h3M18 12h3M16.24 7.76l2.12-2.12M9 18h6M10 22h4M8 12a4 4 0 1 1 8 0c0 1.5-.8 2.5-1.7 3.4-.5.5-.8 1-.8 1.6h-3c0-.6-.3-1.1-.8-1.6C8.8 14.5 8 13.5 8 12Z" /></svg>
+              </div>
+              <h3>切换后立即生效</h3>
+              <p>不需要重启服务。下一次用户点击“开始匹配”时，就会使用这里选定的方式。</p>
+            </article>
+            <article class="explain-card">
+              <div class="explain-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10ZM9 12l2 2 4-4" /></svg>
+              </div>
+              <h3>Key 不会回到浏览器</h3>
+              <p>页面只能看到“已保存”，无法重新读取密钥原文；运行记录也不会保存密钥。</p>
+            </article>
+            <article class="explain-card route-card">
+              <h3>一次匹配怎么完成</h3>
+              <ol>
+                <li><span>1</span><p><strong>查询候选</strong><small>先找已有活动和时间合适的同学</small></p></li>
+                <li><span>2</span><p><strong>解释推荐</strong><small>比较时间、地点、兴趣和信用</small></p></li>
+                <li><span>3</span><p><strong>等待确认</strong><small>只有用户确认后才建局或发邀请</small></p></li>
+              </ol>
+            </article>
+          </aside>
+        </div>
+      </section>
+
+      <section id="plain-logs" class="admin-section log-section" aria-labelledby="logs-heading">
+        <div class="section-heading log-heading">
+          <div>
+            <p class="eyebrow">普通语言运行记录</p>
+            <h2 id="logs-heading">最近发生了什么</h2>
+            <p>这里不显示难懂的服务器代码，而是说明每一步做了什么、结果怎样，以及失败后应该怎么办。</p>
+          </div>
+          <button id="refresh-logs" class="button button-small" type="button">刷新记录</button>
+        </div>
+
+        <div class="log-toolbar" role="group" aria-label="筛选运行记录">
+          <button class="log-filter is-active" type="button" data-filter="all">全部</button>
+          <button class="log-filter" type="button" data-filter="agent">匹配过程</button>
+          <button class="log-filter" type="button" data-filter="system">设置与测试</button>
+          <span id="fallback-note" class="fallback-note"></span>
+        </div>
+
+        <div id="log-list" class="log-list" aria-live="polite">
+          <div class="admin-loading">正在整理运行记录…</div>
+        </div>
+      </section>
+    </main>
+
+    <div id="admin-toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  </body>
+</html>
