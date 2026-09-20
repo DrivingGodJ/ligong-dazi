@@ -5,8 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 SQLITE_COMPATIBILITY_COLUMNS = {
     "users": {
+        "gender": "VARCHAR(20) NOT NULL DEFAULT 'undisclosed'",
         "hidden_profile": "JSON NOT NULL DEFAULT '{}'",
+        "hobby_skills": "JSON NOT NULL DEFAULT '[]'",
+        "skill_marks": "JSON NOT NULL DEFAULT '[]'",
         "hidden_profile_updated_at": "DATETIME",
+        "ai_summary": "TEXT",
+        "ai_summary_generated_at": "DATETIME",
     },
     "activities": {
         "post_activity_processed_at": "DATETIME",
@@ -16,6 +21,8 @@ SQLITE_COMPATIBILITY_COLUMNS = {
         "leave_penalty": "INTEGER NOT NULL DEFAULT 0",
     },
     "feedback": {
+        "skill_name": "VARCHAR(50)",
+        "skill_level": "INTEGER",
         "personality_tags": "JSON NOT NULL DEFAULT '[]'",
         "incident_tags": "JSON NOT NULL DEFAULT '[]'",
         "moderation_status": "VARCHAR(40) NOT NULL DEFAULT 'finalized_legacy'",
@@ -50,3 +57,10 @@ async def ensure_sqlite_compatibility(engine: AsyncEngine) -> None:
                     await connection.execute(
                         text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
                     )
+        if "users" in existing:
+            await connection.execute(
+                text(
+                    "UPDATE users SET gender = 'undisclosed' "
+                    "WHERE gender IS NULL OR gender NOT IN ('male', 'female', 'undisclosed')"
+                )
+            )

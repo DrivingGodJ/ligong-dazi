@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from app.core import DatabaseRuntime, get_settings, hash_password
+from app.migrations import ensure_sqlite_compatibility
 from app.models import Activity, ActivityMember, Base, User
 
 DEMO_PASSWORD = "demo-password-123"
@@ -17,8 +18,13 @@ DEMO_USERS = [
         "campus": "南区",
         "department": "设计艺术与传媒学院",
         "grade_year": 3,
+        "gender": "male",
         "bio": "喜欢羽毛球、摄影和徒步",
         "interests": ["羽毛球", "摄影", "徒步"],
+        "hobby_skills": [
+            {"name": "羽毛球", "level": 2},
+            {"name": "摄影", "level": 4},
+        ],
         "preferred_locations": ["南区体育馆", "图书馆"],
         "social_style": "quiet",
         "preferred_group_min": 2,
@@ -31,8 +37,10 @@ DEMO_USERS = [
         "campus": "南区",
         "department": "设计艺术与传媒学院",
         "grade_year": 3,
+        "gender": "male",
         "bio": "羽毛球爱好者，守时，偏安静",
         "interests": ["羽毛球", "电影", "摄影"],
+        "hobby_skills": [{"name": "羽毛球", "level": 5}],
         "preferred_locations": ["南区体育馆"],
         "social_style": "quiet",
         "preferred_group_min": 2,
@@ -45,8 +53,10 @@ DEMO_USERS = [
         "campus": "北区",
         "department": "自动化学院",
         "grade_year": 2,
+        "gender": "female",
         "bio": "喜欢篮球和游戏，性格外向",
         "interests": ["篮球", "游戏", "跑步"],
+        "hobby_skills": [{"name": "篮球", "level": 4}],
         "preferred_locations": ["北区篮球场"],
         "social_style": "outgoing",
         "preferred_group_min": 3,
@@ -59,8 +69,13 @@ DEMO_USERS = [
         "campus": "南区",
         "department": "计算机科学与工程学院",
         "grade_year": 3,
+        "gender": "female",
         "bio": "常去图书馆自习，也打羽毛球",
         "interests": ["自习", "羽毛球", "编程"],
+        "hobby_skills": [
+            {"name": "自习", "level": 4},
+            {"name": "羽毛球", "level": 3},
+        ],
         "preferred_locations": ["图书馆", "南区体育馆"],
         "social_style": "balanced",
         "preferred_group_min": 2,
@@ -78,6 +93,7 @@ async def seed() -> None:
     try:
         async with database.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+        await ensure_sqlite_compatibility(database.engine)
         async with database.session_factory() as session:
             users: dict[str, User] = {}
             for profile in DEMO_USERS:
@@ -90,6 +106,11 @@ async def seed() -> None:
                     )
                     session.add(user)
                     await session.flush()
+                else:
+                    if user.gender == "undisclosed":
+                        user.gender = str(profile["gender"])
+                    if not user.hobby_skills:
+                        user.hobby_skills = list(profile.get("hobby_skills", []))
                 users[user.email] = user
 
             owner = users["xiaozhou@njust.demo"]

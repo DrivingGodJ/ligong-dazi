@@ -3,10 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 from sqlalchemy import select
 
+from app.agent import AgentOutputError
 from app.models import Activity as ActivityModel
-from app.models import ActivityMember, User
+from app.models import ActivityMember, Feedback, User
+from app.post_activity import refresh_hidden_profile
 from tests.conftest import register_user
 
 
@@ -62,6 +65,34 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
         json={"email": "owner@njust.edu.cn", "password": "test-password-123"},
     )
     assert login.status_code == 200
+
+
+async def test_agent_output_error_has_recoverable_code_and_no_cooldown(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_with_invalid_output(*_: object, **__: object) -> None:
+        raise AgentOutputError("Agent 没有返回可用的匹配结果")
+
+    monkeypatch.setattr("app.api.run_matching_agent", fail_with_invalid_output)
+    _, headers = await register_user(client, "agent-error@njust.edu.cn", "输出异常测试")
+    starts_at = datetime.now(UTC) + timedelta(days=1)
+    payload = {
+        "category": "羽毛球",
+        "starts_at": starts_at.isoformat(),
+        "ends_at": (starts_at + timedelta(hours=2)).isoformat(),
+        "location": "南区体育馆",
+        "people_needed": 2,
+        "personal_requirement": "测试无法生成结构化结果时的恢复路径",
+    }
+
+    first = await client.post("/api/v1/matches/preview", headers=headers, json=payload)
+    second = await client.post("/api/v1/matches/preview", headers=headers, json=payload)
+
+    assert first.status_code == 502
+    assert first.json()["detail"]["code"] == "agent_output_error"
+    assert "清空" in first.json()["detail"]["message"]
+    assert second.status_code == 502
 
 
 async def test_agent_preview_confirmation_invitation_and_feedback(
@@ -301,8 +332,13 @@ async def test_guided_registration_solo_activity_and_timed_leave(
             "campus": "江阴校区",
             "department": "设计艺术与传媒学院",
             "grade_year": 3,
+            "gender": "male",
             "bio": "喜欢有计划地参加活动",
             "interests": ["摄影", "羽毛球"],
+            "hobby_skills": [
+                {"name": "摄影", "level": 4},
+                {"name": "羽毛球", "level": 2},
+            ],
             "preferred_locations": ["图书馆"],
             "social_style": "balanced",
             "preferred_group_min": 2,
@@ -313,8 +349,32 @@ async def test_guided_registration_solo_activity_and_timed_leave(
     headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
     me = await client.get("/api/v1/users/me", headers=headers)
     assert me.json()["department"] == "设计艺术与传媒学院"
+    assert me.json()["gender"] == "male"
     assert me.json()["interests"] == ["摄影", "羽毛球"]
+    assert me.json()["hobby_skills"] == [
+        {"name": "摄影", "level": 4},
+        {"name": "羽毛球", "level": 2},
+    ]
+    assert me.json()["skill_marks"] == []
     assert "hidden_profile" not in me.json()
+
+    invalid_gender = await client.patch(
+        "/api/v1/users/me",
+        headers=headers,
+        json={"gender": "other"},
+    )
+    assert invalid_gender.status_code == 422
+
+    invalid_registration = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "invalid-gender@njust.edu.cn",
+            "password": "test-password-123",
+            "display_name": "无效性别",
+            "gender": "other",
+        },
+    )
+    assert invalid_registration.status_code == 422
 
     starts_at = datetime.now(UTC) + timedelta(hours=12)
     preview = await client.post(
@@ -346,22 +406,22 @@ async def test_guided_registration_solo_activity_and_timed_leave(
         if item["activity"]["id"] == confirmed.json()["activity"]["id"]
     )
     assert mine_item["can_leave"] is True
-    assert mine_item["leave_penalty"] == 2
+    assert mine_item["leave_penalty"] == 0
 
-    unconfirmed_leave = await client.post(
+    leave = await client.post(
         f"/api/v1/activities/{confirmed.json()['activity']['id']}/leave",
         headers=headers,
         json={"confirm_penalty": False},
     )
-    assert unconfirmed_leave.status_code == 409
-    leave = await client.post(
-        f"/api/v1/activities/{confirmed.json()['activity']['id']}/leave",
-        headers=headers,
-        json={"confirm_penalty": True},
-    )
     assert leave.status_code == 200, leave.text
-    assert leave.json()["credit_delta"] == -2
-    assert leave.json()["credit_score"] == 98
+    assert leave.json()["credit_delta"] == 0
+    assert leave.json()["credit_score"] == 100
+    assert leave.json()["activity_deleted"] is True
+    mine_after = await client.get("/api/v1/activities/mine", headers=headers)
+    assert all(
+        item["activity"]["id"] != confirmed.json()["activity"]["id"]
+        for item in mine_after.json()
+    )
 
 
 async def test_sensitive_personalization_is_not_used_for_ranking(client: httpx.AsyncClient) -> None:
@@ -387,6 +447,101 @@ async def test_sensitive_personalization_is_not_used_for_ranking(client: httpx.A
     report = response.json()["personalization"]
     assert any("性别" in item for item in report["ignored_for_safety"])
     assert response.json()["candidates"]
+
+
+async def test_mentor_preference_and_accumulated_skill_marks(
+    client: httpx.AsyncClient,
+) -> None:
+    _, owner_headers = await register_user(client, "learner@njust.edu.cn", "新手")
+    _, low_headers = await register_user(client, "low@njust.edu.cn", "入门搭子")
+    _, expert_headers = await register_user(client, "expert@njust.edu.cn", "高手搭子")
+    _, reviewer_one_headers = await register_user(client, "r1@njust.edu.cn", "评价者一")
+    _, reviewer_two_headers = await register_user(client, "r2@njust.edu.cn", "评价者二")
+    await update_profile(
+        client,
+        owner_headers,
+        hobby_skills=[{"name": "羽毛球", "level": 1}],
+    )
+    await update_profile(
+        client,
+        low_headers,
+        hobby_skills=[{"name": "羽毛球", "level": 1}],
+    )
+    expert = await update_profile(
+        client,
+        expert_headers,
+        hobby_skills=[{"name": "羽毛球", "level": 5}],
+    )
+    starts_at = datetime.now(UTC) + timedelta(days=1)
+    preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=owner_headers,
+        json={
+            "category": "羽毛球",
+            "starts_at": starts_at.isoformat(),
+            "ends_at": (starts_at + timedelta(hours=2)).isoformat(),
+            "location": "南区体育馆",
+            "people_needed": 1,
+            "personal_requirement": "我是小白，希望有大佬带带我",
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    assert any(
+        "熟练度较高" in item for item in preview.json()["personalization"]["applied"]
+    )
+    candidates = [
+        item for item in preview.json()["candidates"] if item["candidate_type"] == "user"
+    ]
+    assert candidates[0]["candidate_id"] == expert["id"]
+    assert any("精通" in reason for reason in candidates[0]["explanation"])
+
+    reviewer_one = (await client.get("/api/v1/users/me", headers=reviewer_one_headers)).json()
+    reviewer_two = (await client.get("/api/v1/users/me", headers=reviewer_two_headers)).json()
+    owner = (await client.get("/api/v1/users/me", headers=owner_headers)).json()
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        reviewed_user = await session.get(User, owner["id"])
+        assert reviewed_user is not None
+        activity = ActivityModel(
+            owner_id=reviewed_user.id,
+            title="水平反馈测试",
+            category="羽毛球",
+            starts_at=datetime.now(UTC) - timedelta(hours=2),
+            ends_at=datetime.now(UTC) - timedelta(hours=1),
+            location="南区体育馆",
+            capacity=4,
+            status="completed",
+        )
+        session.add(activity)
+        await session.flush()
+        reviewer_ids = [reviewer_one["id"], reviewer_two["id"], expert["id"]]
+        for index, reviewer_id in enumerate(reviewer_ids):
+            session.add(
+                Feedback(
+                    activity_id=activity.id,
+                    reviewer_id=reviewer_id,
+                    reviewee_id=reviewed_user.id,
+                    attendance="attended",
+                    rating=4,
+                    skill_name="羽毛球",
+                    skill_level=[4, 5, 4][index],
+                    moderation_status="finalized",
+                    finalized_at=datetime.now(UTC),
+                )
+            )
+            await session.flush()
+            await refresh_hidden_profile(session, reviewed_user)
+            if index < 2:
+                assert reviewed_user.skill_marks == []
+
+        assert reviewed_user.credit_score == 100
+        assert reviewed_user.skill_marks[0]["flag_type"] == "possible_smurfing"
+        assert reviewed_user.skill_marks[0]["feedback_count"] == 3
+        await session.commit()
+
+    refreshed = await client.get("/api/v1/users/me", headers=owner_headers)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["skill_marks"][0]["name"] == "羽毛球"
 
 
 async def test_user_cannot_read_another_users_agent_trace(client: httpx.AsyncClient) -> None:

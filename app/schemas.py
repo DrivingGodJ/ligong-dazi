@@ -18,6 +18,40 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+Gender = Literal["male", "female", "undisclosed"]
+
+
+class HobbySkill(ApiModel):
+    name: str = Field(min_length=1, max_length=40)
+    level: int = Field(ge=1, le=5)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        return value.strip()
+
+
+class SkillMark(ApiModel):
+    name: str
+    flag_type: Literal["level_disputed", "possible_smurfing"]
+    label: str
+    feedback_count: int
+    average_level: float
+
+
+def clean_hobby_skills(value: list[HobbySkill]) -> list[HobbySkill]:
+    cleaned: list[HobbySkill] = []
+    seen: set[str] = set()
+    for item in value:
+        name = item.name.strip()
+        key = name.casefold()
+        if key in seen:
+            raise ValueError(f"爱好或特长“{name}”重复了")
+        seen.add(key)
+        cleaned.append(HobbySkill(name=name, level=item.level))
+    return cleaned
+
+
 class RegisterRequest(ApiModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
@@ -26,8 +60,10 @@ class RegisterRequest(ApiModel):
     campus: str | None = Field(default=None, max_length=80)
     department: str | None = Field(default=None, max_length=120)
     grade_year: int | None = Field(default=None, ge=1, le=8)
+    gender: Gender = "undisclosed"
     bio: str | None = Field(default=None, max_length=500)
     interests: list[str] = Field(default_factory=list, max_length=30)
+    hobby_skills: list[HobbySkill] = Field(default_factory=list, max_length=20)
     preferred_locations: list[str] = Field(default_factory=list, max_length=30)
     social_style: Literal["quiet", "balanced", "outgoing"] = "balanced"
     preferred_group_min: int = Field(default=2, ge=2, le=30)
@@ -37,6 +73,13 @@ class RegisterRequest(ApiModel):
     @classmethod
     def clean_registration_lists(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @field_validator("hobby_skills")
+    @classmethod
+    def clean_registration_hobby_skills(
+        cls, value: list[HobbySkill]
+    ) -> list[HobbySkill]:
+        return clean_hobby_skills(value)
 
     @model_validator(mode="after")
     def validate_registration_group_range(self) -> RegisterRequest:
@@ -61,8 +104,10 @@ class UserProfileUpdate(ApiModel):
     campus: str | None = Field(default=None, max_length=80)
     department: str | None = Field(default=None, max_length=120)
     grade_year: int | None = Field(default=None, ge=1, le=8)
+    gender: Gender | None = None
     bio: str | None = Field(default=None, max_length=500)
     interests: list[str] | None = None
+    hobby_skills: list[HobbySkill] | None = None
     preferred_locations: list[str] | None = None
     social_style: Literal["quiet", "balanced", "outgoing"] | None = None
     preferred_group_min: int | None = Field(default=None, ge=2, le=30)
@@ -77,6 +122,17 @@ class UserProfileUpdate(ApiModel):
         if len(cleaned) > 30:
             raise ValueError("列表最多包含 30 项")
         return cleaned
+
+    @field_validator("hobby_skills")
+    @classmethod
+    def clean_profile_hobby_skills(
+        cls, value: list[HobbySkill] | None
+    ) -> list[HobbySkill] | None:
+        if value is None:
+            return None
+        if len(value) > 20:
+            raise ValueError("爱好和特长最多填写 20 项")
+        return clean_hobby_skills(value)
 
     @model_validator(mode="after")
     def validate_group_range(self) -> UserProfileUpdate:
@@ -96,8 +152,11 @@ class UserPublic(ApiModel):
     campus: str | None
     department: str | None
     grade_year: int | None
+    gender: Gender
     bio: str | None
     interests: list[str]
+    hobby_skills: list[HobbySkill]
+    skill_marks: list[SkillMark]
     preferred_locations: list[str]
     social_style: str
     preferred_group_min: int
@@ -109,6 +168,34 @@ class UserMe(UserPublic):
     email: EmailStr
     is_active: bool
     created_at: datetime
+    ai_summary: str | None
+    ai_summary_generated_at: datetime | None
+
+
+class ProfileSummaryResponse(ApiModel):
+    summary: str
+    generated_at: datetime
+    next_available_at: datetime
+    mode: Literal["ai", "rules"]
+
+
+class UserSystemProfile(ApiModel):
+    summary: str
+    completed_activity_count: int
+    finalized_feedback_count: int
+    average_rating: float | None
+    activity_signals: list[dict]
+    personality_signals: list[dict]
+    attendance_signals: dict[str, int]
+    incident_signals: dict[str, int]
+    review_integrity: dict[str, int]
+    skill_marks: list[SkillMark]
+    updated_at: datetime | None
+
+
+class UserProfilePage(ApiModel):
+    user: UserPublic
+    system_profile: UserSystemProfile
 
 
 class ActivityCreate(ApiModel):
@@ -147,6 +234,7 @@ class ActivityPublic(ApiModel):
     location: str
     capacity: int
     participant_count: int
+    gender_counts: dict[Gender, int]
     description: str | None
     personal_requirement: str | None
     status: str
@@ -274,6 +362,78 @@ class ActivityLeaveResult(ApiModel):
     credit_delta: int
     credit_score: int
     message: str
+    activity_deleted: bool = False
+
+
+class ActivitySquareItem(ApiModel):
+    activity: ActivityPublic
+    joined: bool
+    joinable: bool
+    recommendation_score: float
+    recommendation_reasons: list[str] = Field(default_factory=list)
+
+
+class ActivitySquarePage(ApiModel):
+    items: list[ActivitySquareItem]
+    offset: int
+    next_offset: int | None
+    has_more: bool
+
+
+class ActivityJoinResult(ApiModel):
+    activity: ActivityPublic
+    message: str
+
+
+class ActivityPhotoUpload(ApiModel):
+    data_url: str = Field(min_length=32, max_length=8_000_000)
+
+
+class ActivityPhotoPublic(ApiModel):
+    id: str
+    activity_id: str
+    uploader: UserPublic
+    media_type: str
+    uploaded_at: datetime
+    content_url: str
+
+
+class ActivityTimeVoteCreate(ApiModel):
+    starts_at: datetime
+    ends_at: datetime
+
+    @field_validator("starts_at", "ends_at")
+    @classmethod
+    def require_vote_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("时间必须包含时区，例如 +08:00")
+        return value
+
+    @model_validator(mode="after")
+    def validate_vote_times(self) -> ActivityTimeVoteCreate:
+        if self.ends_at <= self.starts_at:
+            raise ValueError("结束时间必须晚于开始时间")
+        if self.starts_at <= datetime.now(UTC):
+            raise ValueError("新的开始时间必须晚于当前时间")
+        return self
+
+
+class ActivityTimeVoteRespond(ApiModel):
+    decision: Literal["approved", "rejected"]
+
+
+class ActivityTimeVotePublic(ApiModel):
+    id: str
+    activity_id: str
+    proposer: UserPublic
+    proposed_starts_at: datetime
+    proposed_ends_at: datetime
+    status: str
+    approvals: int
+    required_approvals: int
+    my_decision: str | None
+    created_at: datetime
+    resolved_at: datetime | None
 
 
 PersonalityTag = Literal[
@@ -295,20 +455,28 @@ IncidentTag = Literal[
     "cancelled",
     "no_show",
     "unsafe_behavior",
+    "skill_level_mismatch",
+    "suspected_smurfing",
 ]
 
 
 class FeedbackCreate(ApiModel):
     activity_id: str
     reviewee_id: str
-    attendance: Literal["attended", "cancelled_early", "late_cancel", "no_show"]
+    attendance: Literal["attended", "late_cancel", "no_show"]
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=500)
+    skill_name: str | None = Field(default=None, max_length=50)
+    skill_level: int | None = Field(default=None, ge=1, le=5)
     personality_tags: list[PersonalityTag] = Field(default_factory=list, max_length=4)
     incident_tags: list[IncidentTag] = Field(default_factory=list, max_length=4)
 
     @model_validator(mode="after")
     def validate_feedback_evidence(self) -> FeedbackCreate:
+        if self.skill_name is not None:
+            self.skill_name = self.skill_name.strip() or None
+        if (self.skill_name is None) != (self.skill_level is None):
+            raise ValueError("评价爱好水平时，请同时填写项目名称和水平")
         if self.attendance == "no_show" and "no_show" not in self.incident_tags:
             self.incident_tags.append("no_show")
         if "no_show" in self.incident_tags and self.attendance != "no_show":
@@ -337,6 +505,8 @@ class PeerReviewTask(ApiModel):
     attendance: str
     rating: int
     comment: str | None
+    skill_name: str | None
+    skill_level: int | None
     personality_tags: list[str]
     incident_tags: list[str]
     ai_summary: str

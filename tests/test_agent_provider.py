@@ -5,9 +5,14 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from pydantic import SecretStr
 
-from app.agent import OpenAICompatibleMatchingAgent
+from app.agent import (
+    AgentOutputError,
+    OpenAICompatibleMatchingAgent,
+    run_matching_agent,
+)
 from app.core import Settings
 from app.matching import MatchContext, Personalization, ScoredCandidate
 
@@ -149,3 +154,53 @@ async def test_openai_compatible_agent_executes_tools_and_validates_final_ids() 
     ]
     assert decision.mode == "openai_compatible"
     assert decision.model == "test-model"
+
+
+async def test_openai_compatible_agent_rejects_unstructured_model_output() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "抱歉，我无法完成这个请求。",
+                        }
+                    }
+                ]
+            },
+        )
+
+    settings = Settings(
+        environment="test",
+        jwt_secret=SecretStr("test-secret-with-enough-entropy-for-tests"),
+        ai_provider="openai_compatible",
+        ai_api_key=SecretStr("test-key"),
+        ai_base_url="https://model.example/v1",
+        ai_model="test-model",
+    )
+    runtime = FakeToolRuntime()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(AgentOutputError, match="没有返回可用"):
+            await OpenAICompatibleMatchingAgent(settings, client=client).run(runtime)
+
+
+async def test_agent_output_error_is_not_hidden_by_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_with_invalid_output(*_: object, **__: object) -> None:
+        raise AgentOutputError("Agent 没有返回可用的匹配结果")
+
+    monkeypatch.setattr(OpenAICompatibleMatchingAgent, "run", fail_with_invalid_output)
+    settings = Settings(
+        environment="test",
+        jwt_secret=SecretStr("test-secret-with-enough-entropy-for-tests"),
+        ai_provider="openai_compatible",
+        ai_api_key=SecretStr("test-key"),
+        ai_fallback_enabled=True,
+    )
+    runtime = FakeToolRuntime()
+
+    with pytest.raises(AgentOutputError):
+        await run_matching_agent(object(), runtime.context, settings)  # type: ignore[arg-type]

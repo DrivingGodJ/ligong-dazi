@@ -565,7 +565,7 @@ def _system_log_item(event: SystemEvent) -> AdminLogItem:
         "ai_connection": "AI 服务连接",
         "activity_membership": "活动参与情况",
         "feedback_review": "活动评价审核",
-        "post_activity_agent": "活动结束后的画像学习",
+        "post_activity_agent": "活动结束后的记录整理",
     }
     return AdminLogItem(
         id=event.id,

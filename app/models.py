@@ -75,8 +75,11 @@ class User(Base, TimestampMixin):
     campus: Mapped[str | None] = mapped_column(String(80), nullable=True)
     department: Mapped[str | None] = mapped_column(String(120), nullable=True)
     grade_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str] = mapped_column(String(20), default="undisclosed", index=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)
     interests: Mapped[list[str]] = mapped_column(JSON, default=list)
+    hobby_skills: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    skill_marks: Mapped[list[dict]] = mapped_column(JSON, default=list)
     preferred_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
     social_style: Mapped[str] = mapped_column(String(30), default="balanced")
     preferred_group_min: Mapped[int] = mapped_column(Integer, default=2)
@@ -84,6 +87,10 @@ class User(Base, TimestampMixin):
     credit_score: Mapped[int] = mapped_column(Integer, default=100, index=True)
     hidden_profile: Mapped[dict] = mapped_column(JSON, default=dict)
     hidden_profile_updated_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime(), nullable=True
+    )
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_generated_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime(), nullable=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
@@ -132,6 +139,49 @@ class ActivityMember(Base):
     joined_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     leave_penalty: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ActivityPhoto(Base):
+    __tablename__ = "activity_photos"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_id: Mapped[str] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"), index=True
+    )
+    uploader_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    file_path: Mapped[str] = mapped_column(String(500))
+    media_type: Mapped[str] = mapped_column(String(60))
+    uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+
+
+class ActivityTimeVote(Base):
+    __tablename__ = "activity_time_votes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_id: Mapped[str] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"), index=True
+    )
+    proposer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    proposed_starts_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    proposed_ends_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class ActivityTimeVoteResponse(Base):
+    __tablename__ = "activity_time_vote_responses"
+    __table_args__ = (
+        UniqueConstraint("vote_id", "user_id", name="uq_activity_time_vote_response"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    vote_id: Mapped[str] = mapped_column(
+        ForeignKey("activity_time_votes.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class MatchRequest(Base, TimestampMixin):
@@ -243,6 +293,8 @@ class Feedback(Base):
     attendance: Mapped[str] = mapped_column(String(30))
     rating: Mapped[int] = mapped_column(Integer)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    skill_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    skill_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     personality_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     incident_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     moderation_status: Mapped[str] = mapped_column(

@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent import TOOL_CATALOG, run_matching_agent
+from app.activity_media import (
+    build_activity_ics,
+    cleanup_expired_activity_photos,
+    decode_image_data_url,
+    remove_photo_file,
+)
+from app.agent import TOOL_CATALOG, AgentOutputError, run_matching_agent
 from app.core import (
     DatabaseRuntime,
     Settings,
@@ -20,10 +29,13 @@ from app.core import (
     hash_password,
     verify_password,
 )
-from app.matching import MatchContext
+from app.matching import MatchContext, location_similarity
 from app.models import (
     Activity,
     ActivityMember,
+    ActivityPhoto,
+    ActivityTimeVote,
+    ActivityTimeVoteResponse,
     AgentRun,
     CreditEvent,
     Feedback,
@@ -34,6 +46,8 @@ from app.models import (
     Reminder,
     SystemEvent,
     User,
+    UserBlock,
+    new_id,
     utcnow,
 )
 from app.post_activity import (
@@ -45,11 +59,20 @@ from app.post_activity import (
     process_completed_activities,
     refresh_hidden_profile,
 )
+from app.profile_summary import generate_profile_summary
 from app.schemas import (
     ActivityCreate,
+    ActivityJoinResult,
     ActivityLeaveRequest,
     ActivityLeaveResult,
+    ActivityPhotoPublic,
+    ActivityPhotoUpload,
     ActivityPublic,
+    ActivitySquareItem,
+    ActivitySquarePage,
+    ActivityTimeVoteCreate,
+    ActivityTimeVotePublic,
+    ActivityTimeVoteRespond,
     AgentRunPublic,
     CandidatePublic,
     FeedbackCreate,
@@ -67,16 +90,22 @@ from app.schemas import (
     PeerReviewResult,
     PeerReviewTask,
     PersonalizationReport,
+    ProfileSummaryResponse,
     RegisterRequest,
     TokenResponse,
     ToolDefinition,
     UserMe,
+    UserProfilePage,
     UserProfileUpdate,
     UserPublic,
+    UserSystemProfile,
 )
 
 router = APIRouter(prefix="/api/v1")
 auth_scheme = HTTPBearer(auto_error=False)
+MATCH_COOLDOWN_SECONDS = 60
+PROFILE_SUMMARY_COOLDOWN_SECONDS = 5 * 60
+PHOTO_UPLOAD_WINDOW = timedelta(minutes=15)
 
 
 def get_settings(request: Request) -> Settings:
@@ -116,17 +145,40 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def normalized_gender(value: str) -> str:
+    return value if value in {"male", "female", "undisclosed"} else "undisclosed"
+
+
 def user_public(user: User) -> UserPublic:
-    return UserPublic.model_validate(user)
+    values = {field: getattr(user, field) for field in UserPublic.model_fields}
+    values["gender"] = normalized_gender(user.gender)
+    return UserPublic.model_validate(values)
+
+
+def user_me(user: User) -> UserMe:
+    values = {field: getattr(user, field) for field in UserMe.model_fields}
+    values["gender"] = normalized_gender(user.gender)
+    return UserMe.model_validate(values)
 
 
 async def activity_public(session: AsyncSession, activity: Activity) -> ActivityPublic:
-    count = await session.scalar(
-        select(func.count(ActivityMember.id)).where(
-            ActivityMember.activity_id == activity.id,
-            ActivityMember.status == "confirmed",
+    gender_rows = (
+        await session.execute(
+            select(User.gender, func.count(ActivityMember.id))
+            .select_from(ActivityMember)
+            .join(User, User.id == ActivityMember.user_id)
+            .where(
+                ActivityMember.activity_id == activity.id,
+                ActivityMember.status == "confirmed",
+            )
+            .group_by(User.gender)
         )
-    )
+    ).all()
+    gender_counts = {"male": 0, "female": 0, "undisclosed": 0}
+    for gender, count in gender_rows:
+        key = normalized_gender(gender)
+        gender_counts[key] += int(count)
+    count = sum(gender_counts.values())
     return ActivityPublic(
         id=activity.id,
         owner_id=activity.owner_id,
@@ -136,10 +188,147 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
         ends_at=activity.ends_at,
         location=activity.location,
         capacity=activity.capacity,
-        participant_count=int(count or 0),
+        participant_count=count,
+        gender_counts=gender_counts,
         description=activity.description,
         personal_requirement=activity.personal_requirement,
         status=activity.status,
+    )
+
+
+def system_profile_public(user: User) -> UserSystemProfile:
+    learned = user.hidden_profile or {}
+    review_integrity = learned.get("review_integrity") or {}
+    return UserSystemProfile(
+        summary=str(learned.get("summary") or "活动记录还不多，系统暂时没有形成稳定印象。"),
+        completed_activity_count=int(learned.get("completed_activity_count") or 0),
+        finalized_feedback_count=int(learned.get("finalized_feedback_count") or 0),
+        average_rating=learned.get("average_rating"),
+        activity_signals=learned.get("activity_signals") or [],
+        personality_signals=learned.get("personality_signals") or [],
+        attendance_signals=learned.get("attendance_signals") or {},
+        incident_signals=learned.get("incident_signals") or {},
+        review_integrity={
+            "supported_feedback_count": int(
+                review_integrity.get("supported_feedback_count") or 0
+            ),
+            "unsupported_serious_feedback_count": int(
+                review_integrity.get("unsupported_serious_feedback_count") or 0
+            ),
+        },
+        skill_marks=user.skill_marks or [],
+        updated_at=user.hidden_profile_updated_at,
+    )
+
+
+async def confirmed_membership(
+    session: AsyncSession,
+    activity_id: str,
+    user_id: str,
+) -> ActivityMember | None:
+    return await session.scalar(
+        select(ActivityMember).where(
+            ActivityMember.activity_id == activity_id,
+            ActivityMember.user_id == user_id,
+            ActivityMember.status == "confirmed",
+        )
+    )
+
+
+def activity_recommendation(user: User, activity: Activity) -> tuple[float, list[str]]:
+    score = 20.0
+    reasons: list[str] = []
+    if activity.category in user.interests:
+        score += 35
+        reasons.append(f"符合你对{activity.category}的兴趣")
+    location_score = max(
+        (location_similarity(activity.location, item) for item in user.preferred_locations),
+        default=0.0,
+    )
+    if location_score >= 0.75:
+        score += 30
+        reasons.append("地点与你常去的位置很接近")
+    elif location_score >= 0.4:
+        score += 18
+        reasons.append("地点大致符合你的活动范围")
+    elif user.campus and location_similarity(activity.location, user.campus) >= 0.4:
+        score += 10
+        reasons.append("活动地点可能在你的常驻校区附近")
+    if user.preferred_group_min <= activity.capacity <= user.preferred_group_max:
+        score += 10
+        reasons.append("活动人数规模符合你的偏好")
+    if activity.starts_at <= utcnow() + timedelta(days=3):
+        score += 5
+        reasons.append("活动就在最近几天")
+    if not reasons:
+        reasons.append("这是一场仍有名额的新活动")
+    return round(min(score, 100.0), 1), reasons[:3]
+
+
+async def time_vote_public(
+    session: AsyncSession,
+    vote: ActivityTimeVote,
+    current_user_id: str,
+) -> ActivityTimeVotePublic:
+    proposer = await session.get(User, vote.proposer_id)
+    if proposer is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="投票发起人不存在")
+    responses = list(
+        (
+            await session.scalars(
+                select(ActivityTimeVoteResponse).where(
+                    ActivityTimeVoteResponse.vote_id == vote.id
+                )
+            )
+        ).all()
+    )
+    confirmed_count = int(
+        await session.scalar(
+            select(func.count(ActivityMember.id)).where(
+                ActivityMember.activity_id == vote.activity_id,
+                ActivityMember.status == "confirmed",
+            )
+        )
+        or 0
+    )
+    my_response = next(
+        (item.decision for item in responses if item.user_id == current_user_id), None
+    )
+    return ActivityTimeVotePublic(
+        id=vote.id,
+        activity_id=vote.activity_id,
+        proposer=user_public(proposer),
+        proposed_starts_at=vote.proposed_starts_at,
+        proposed_ends_at=vote.proposed_ends_at,
+        status=vote.status,
+        approvals=sum(item.decision == "approved" for item in responses),
+        required_approvals=max(0, confirmed_count - 1),
+        my_decision=my_response,
+        created_at=vote.created_at,
+        resolved_at=vote.resolved_at,
+    )
+
+
+async def reschedule_activity_reminders(session: AsyncSession, activity: Activity) -> None:
+    await session.execute(delete(Reminder).where(Reminder.activity_id == activity.id))
+    reminder_at = activity.starts_at - timedelta(hours=1)
+    if reminder_at <= utcnow():
+        return
+    member_ids = list(
+        (
+            await session.scalars(
+                select(ActivityMember.user_id).where(
+                    ActivityMember.activity_id == activity.id,
+                    ActivityMember.status == "confirmed",
+                )
+            )
+        ).all()
+    )
+    session.add_all(
+        [
+            Reminder(activity_id=activity.id, user_id=user_id, remind_at=reminder_at)
+            for user_id in member_ids
+        ]
     )
 
 
@@ -158,8 +347,10 @@ async def register(
         campus=payload.campus.strip() if payload.campus else None,
         department=payload.department.strip() if payload.department else None,
         grade_year=payload.grade_year,
+        gender=payload.gender,
         bio=payload.bio.strip() if payload.bio else None,
         interests=payload.interests,
+        hobby_skills=[item.model_dump() for item in payload.hobby_skills],
         preferred_locations=payload.preferred_locations,
         social_style=payload.social_style,
         preferred_group_min=payload.preferred_group_min,
@@ -184,7 +375,7 @@ async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDe
 
 @router.get("/users/me", response_model=UserMe)
 async def read_me(current_user: CurrentUser) -> UserMe:
-    return UserMe.model_validate(current_user)
+    return user_me(current_user)
 
 
 @router.patch("/users/me", response_model=UserMe)
@@ -202,10 +393,84 @@ async def update_me(
             detail="preferred_group_min 不能大于 preferred_group_max",
         )
     for field_name, value in values.items():
+        if field_name == "hobby_skills":
+            value = [
+                item.model_dump() if hasattr(item, "model_dump") else item for item in value
+            ]
         setattr(current_user, field_name, value)
+    if "hobby_skills" in values:
+        await session.flush()
+        await refresh_hidden_profile(session, current_user)
     await session.commit()
     await session.refresh(current_user)
-    return UserMe.model_validate(current_user)
+    return user_me(current_user)
+
+
+@router.get("/users/{user_id}/profile", response_model=UserProfilePage)
+async def read_user_profile(
+    user_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> UserProfilePage:
+    user = await session.get(User, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    blocked = await session.scalar(
+        select(UserBlock.id).where(
+            or_(
+                (UserBlock.blocker_id == current_user.id)
+                & (UserBlock.blocked_id == user.id),
+                (UserBlock.blocker_id == user.id)
+                & (UserBlock.blocked_id == current_user.id),
+            )
+        )
+    )
+    if blocked:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+    return UserProfilePage(
+        user=user_public(user),
+        system_profile=system_profile_public(user),
+    )
+
+
+@router.post("/users/me/ai-summary", response_model=ProfileSummaryResponse)
+async def summarize_me(
+    current_user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> ProfileSummaryResponse:
+    now = utcnow()
+    if current_user.ai_summary_generated_at is not None:
+        next_available = current_user.ai_summary_generated_at + timedelta(
+            seconds=PROFILE_SUMMARY_COOLDOWN_SECONDS
+        )
+        if now < next_available:
+            retry_after = max(1, int((next_available - now).total_seconds()))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"刚刚已经总结过啦，请 {retry_after} 秒后再试。",
+                headers={"Retry-After": str(retry_after)},
+            )
+    summary, mode = await generate_profile_summary(current_user, settings)
+    generated_at = utcnow()
+    current_user.ai_summary = summary
+    current_user.ai_summary_generated_at = generated_at
+    session.add(
+        SystemEvent(
+            category="profile_summary",
+            status="success",
+            title="用户生成了个人综合形象总结",
+            message="已根据现有资料和活动记录生成一份可供本人查看的总结。",
+            details={"user_id": current_user.id, "mode": mode},
+        )
+    )
+    await session.commit()
+    return ProfileSummaryResponse(
+        summary=summary,
+        generated_at=generated_at,
+        next_available_at=generated_at + timedelta(seconds=PROFILE_SUMMARY_COOLDOWN_SECONDS),
+        mode=mode,
+    )
 
 
 @router.post("/activities", response_model=ActivityPublic, status_code=status.HTTP_201_CREATED)
@@ -243,6 +508,176 @@ async def list_activities(
     return [await activity_public(session, activity) for activity in activities]
 
 
+@router.get("/activities/square", response_model=ActivitySquarePage)
+async def activity_square(
+    current_user: CurrentUser,
+    session: SessionDep,
+    category: str | None = Query(default=None, max_length=50),
+    location: str | None = Query(default=None, max_length=160),
+    sort: str = Query(default="recommended", pattern="^(recommended|soonest)$"),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=12, ge=1, le=30),
+) -> ActivitySquarePage:
+    activities = list(
+        (
+            await session.scalars(
+                select(Activity)
+                .where(
+                    Activity.status.in_(["open", "formed"]),
+                    Activity.starts_at > utcnow(),
+                )
+                .order_by(Activity.starts_at.asc())
+                .limit(500)
+            )
+        ).all()
+    )
+    items: list[ActivitySquareItem] = []
+    for activity in activities:
+        if category and activity.category != category:
+            continue
+        if location and location_similarity(location, activity.location) < 0.3:
+            continue
+        public_activity = await activity_public(session, activity)
+        membership = await session.scalar(
+            select(ActivityMember.status).where(
+                ActivityMember.activity_id == activity.id,
+                ActivityMember.user_id == current_user.id,
+            )
+        )
+        score, reasons = activity_recommendation(current_user, activity)
+        items.append(
+            ActivitySquareItem(
+                activity=public_activity,
+                joined=membership == "confirmed",
+                joinable=(
+                    activity.status == "open"
+                    and public_activity.participant_count < activity.capacity
+                ),
+                recommendation_score=score,
+                recommendation_reasons=reasons,
+            )
+        )
+    if sort == "recommended":
+        items.sort(key=lambda item: (-item.recommendation_score, item.activity.starts_at))
+    else:
+        items.sort(key=lambda item: item.activity.starts_at)
+    page_items = items[offset : offset + limit]
+    next_offset = offset + len(page_items)
+    has_more = next_offset < len(items)
+    return ActivitySquarePage(
+        items=page_items,
+        offset=offset,
+        next_offset=next_offset if has_more else None,
+        has_more=has_more,
+    )
+
+
+@router.get(
+    "/activities/{activity_id}/participants",
+    response_model=list[UserPublic],
+)
+async def list_activity_participants(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[UserPublic]:
+    activity = await session.get(Activity, activity_id)
+    if activity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    if activity.status not in {"open", "formed"}:
+        membership = await confirmed_membership(session, activity_id, current_user.id)
+        if membership is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    users = list(
+        (
+            await session.scalars(
+                select(User)
+                .join(ActivityMember, ActivityMember.user_id == User.id)
+                .where(
+                    ActivityMember.activity_id == activity_id,
+                    ActivityMember.status == "confirmed",
+                    User.is_active.is_(True),
+                )
+                .order_by(ActivityMember.role.desc(), ActivityMember.joined_at.asc())
+            )
+        ).all()
+    )
+    return [user_public(user) for user in users]
+
+
+@router.post("/activities/{activity_id}/join", response_model=ActivityJoinResult)
+async def join_activity_from_square(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ActivityJoinResult:
+    activity = await session.scalar(
+        select(Activity).where(Activity.id == activity_id).with_for_update()
+    )
+    if activity is None or activity.status != "open" or activity.starts_at <= utcnow():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="这场活动已经不能加入了")
+    membership = await session.scalar(
+        select(ActivityMember).where(
+            ActivityMember.activity_id == activity.id,
+            ActivityMember.user_id == current_user.id,
+        )
+    )
+    if membership is not None and membership.status == "confirmed":
+        return ActivityJoinResult(
+            activity=await activity_public(session, activity),
+            message="你已经在这场活动里啦。",
+        )
+    member_count = int(
+        await session.scalar(
+            select(func.count(ActivityMember.id)).where(
+                ActivityMember.activity_id == activity.id,
+                ActivityMember.status == "confirmed",
+            )
+        )
+        or 0
+    )
+    if member_count >= activity.capacity:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="刚刚满员了，看看其他活动吧"
+        )
+    if membership is None:
+        membership = ActivityMember(
+            activity_id=activity.id,
+            user_id=current_user.id,
+            role="participant",
+            status="confirmed",
+        )
+        session.add(membership)
+    else:
+        membership.status = "confirmed"
+        membership.left_at = None
+        membership.leave_penalty = 0
+    reminder_at = activity.starts_at - timedelta(hours=1)
+    if reminder_at > utcnow():
+        existing_reminder = await session.scalar(
+            select(Reminder.id).where(
+                Reminder.activity_id == activity.id,
+                Reminder.user_id == current_user.id,
+                Reminder.remind_at == reminder_at,
+            )
+        )
+        if existing_reminder is None:
+            session.add(
+                Reminder(
+                    activity_id=activity.id,
+                    user_id=current_user.id,
+                    remind_at=reminder_at,
+                )
+            )
+    if member_count + 1 >= activity.capacity:
+        activity.status = "formed"
+    await session.commit()
+    return ActivityJoinResult(
+        activity=await activity_public(session, activity),
+        message="加入成功，已经放进“我的活动”。",
+    )
+
+
 @router.get("/activities/mine", response_model=list[MyActivityItem])
 async def list_my_activities(
     current_user: CurrentUser,
@@ -267,7 +702,7 @@ async def list_my_activities(
             continue
         public_activity = await activity_public(session, activity)
         penalty, policy_message = calculate_leave_penalty(activity)
-        can_leave = membership.status == "confirmed" and utcnow() < activity.ends_at
+        can_leave = membership.status == "confirmed" and utcnow() < activity.starts_at
         if membership.role == "owner" and public_activity.participant_count > 1:
             can_leave = False
             policy_message = "你是发起人且已有搭子，暂不能直接退出；请先和成员协商。"
@@ -342,7 +777,7 @@ async def leave_activity(
     if membership.status != "confirmed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="你已经不在这个活动中")
     penalty, policy_message = calculate_leave_penalty(activity)
-    if utcnow() >= activity.ends_at:
+    if utcnow() >= activity.starts_at:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=policy_message)
 
     member_count = int(
@@ -358,6 +793,42 @@ async def leave_activity(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="发起人已有搭子时不能直接退出，请先与成员协商或联系管理员。",
+        )
+    if membership.role == "owner" and member_count == 1:
+        photos = list(
+            (
+                await session.scalars(
+                    select(ActivityPhoto).where(ActivityPhoto.activity_id == activity.id)
+                )
+            ).all()
+        )
+        await session.execute(
+            update(MatchRequest)
+            .where(MatchRequest.activity_id == activity.id)
+            .values(activity_id=None, status="cancelled")
+        )
+        await session.execute(delete(Invitation).where(Invitation.activity_id == activity.id))
+        await session.execute(delete(Reminder).where(Reminder.activity_id == activity.id))
+        await session.delete(activity)
+        session.add(
+            SystemEvent(
+                category="activity_membership",
+                status="success",
+                title="单人活动已取消",
+                message=f"{current_user.display_name}取消了尚未有人加入的“{activity.title}”。",
+                details={"activity_id": activity.id, "user_id": current_user.id},
+            )
+        )
+        await session.commit()
+        for photo in photos:
+            remove_photo_file(photo)
+        return ActivityLeaveResult(
+            activity_id=activity_id,
+            membership_status="deleted",
+            credit_delta=0,
+            credit_score=current_user.credit_score,
+            message="活动已取消，并从活动广场中删除。",
+            activity_deleted=True,
         )
     if penalty and not payload.confirm_penalty:
         raise HTTPException(
@@ -422,7 +893,347 @@ async def leave_activity(
             if penalty
             else "已退出活动，没有扣信用分。"
         ),
+        activity_deleted=False,
     )
+
+
+@router.get("/activities/{activity_id}/calendar.ics")
+async def export_activity_calendar(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> Response:
+    activity = await session.get(Activity, activity_id)
+    membership = await confirmed_membership(session, activity_id, current_user.id)
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    return Response(
+        content=build_activity_ics(activity),
+        media_type="text/calendar; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="activity-{activity.id}.ics"'
+        },
+    )
+
+
+@router.get("/activities/{activity_id}/photos", response_model=list[ActivityPhotoPublic])
+async def list_activity_photos(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[ActivityPhotoPublic]:
+    activity = await session.get(Activity, activity_id)
+    membership = await confirmed_membership(session, activity_id, current_user.id)
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    if activity.ends_at <= utcnow():
+        if await cleanup_expired_activity_photos(session):
+            await session.commit()
+        return []
+    photos = list(
+        (
+            await session.scalars(
+                select(ActivityPhoto)
+                .where(ActivityPhoto.activity_id == activity_id)
+                .order_by(ActivityPhoto.uploaded_at.desc(), ActivityPhoto.id.desc())
+                .limit(5)
+            )
+        ).all()
+    )
+    result: list[ActivityPhotoPublic] = []
+    for photo in photos:
+        uploader = await session.get(User, photo.uploader_id)
+        if uploader is None:
+            continue
+        result.append(
+            ActivityPhotoPublic(
+                id=photo.id,
+                activity_id=photo.activity_id,
+                uploader=user_public(uploader),
+                media_type=photo.media_type,
+                uploaded_at=photo.uploaded_at,
+                content_url=(
+                    f"/api/v1/activities/{activity_id}/photos/{photo.id}/content"
+                ),
+            )
+        )
+    return result
+
+
+@router.post(
+    "/activities/{activity_id}/photos",
+    response_model=ActivityPhotoPublic,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_activity_photo(
+    activity_id: str,
+    payload: ActivityPhotoUpload,
+    current_user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> ActivityPhotoPublic:
+    activity = await session.get(Activity, activity_id)
+    membership = await confirmed_membership(session, activity_id, current_user.id)
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    now = utcnow()
+    if now < activity.starts_at - PHOTO_UPLOAD_WINDOW:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="活动开始前 15 分钟才能上传集合照片。",
+        )
+    if now >= activity.ends_at:
+        if await cleanup_expired_activity_photos(session):
+            await session.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动已结束，照片已清理。")
+
+    content, media_type, extension = decode_image_data_url(
+        payload.data_url, settings.activity_photo_max_bytes
+    )
+    photo_id = new_id()
+    photo_directory = await asyncio.to_thread(
+        lambda: Path(settings.activity_photo_directory).expanduser().resolve()
+    )
+    await asyncio.to_thread(photo_directory.mkdir, parents=True, exist_ok=True)
+    file_path = photo_directory / f"{photo_id}.{extension}"
+    await asyncio.to_thread(file_path.write_bytes, content)
+    photo = ActivityPhoto(
+        id=photo_id,
+        activity_id=activity.id,
+        uploader_id=current_user.id,
+        file_path=str(file_path),
+        media_type=media_type,
+    )
+    session.add(photo)
+    try:
+        await session.flush()
+        photos = list(
+            (
+                await session.scalars(
+                    select(ActivityPhoto)
+                    .where(ActivityPhoto.activity_id == activity.id)
+                    .order_by(ActivityPhoto.uploaded_at.desc(), ActivityPhoto.id.desc())
+                )
+            ).all()
+        )
+        for expired in photos[5:]:
+            remove_photo_file(expired)
+            await session.delete(expired)
+        await session.commit()
+    except Exception:
+        await asyncio.to_thread(file_path.unlink, missing_ok=True)
+        await session.rollback()
+        raise
+    return ActivityPhotoPublic(
+        id=photo.id,
+        activity_id=photo.activity_id,
+        uploader=user_public(current_user),
+        media_type=photo.media_type,
+        uploaded_at=photo.uploaded_at,
+        content_url=f"/api/v1/activities/{activity_id}/photos/{photo.id}/content",
+    )
+
+
+@router.get("/activities/{activity_id}/photos/{photo_id}/content")
+async def read_activity_photo(
+    activity_id: str,
+    photo_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> FileResponse:
+    activity = await session.get(Activity, activity_id)
+    membership = await confirmed_membership(session, activity_id, current_user.id)
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="照片不存在")
+    if activity.ends_at <= utcnow():
+        if await cleanup_expired_activity_photos(session):
+            await session.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="照片已按时清理")
+    photo = await session.scalar(
+        select(ActivityPhoto).where(
+            ActivityPhoto.id == photo_id,
+            ActivityPhoto.activity_id == activity_id,
+        )
+    )
+    photo_exists = photo is not None and await asyncio.to_thread(Path(photo.file_path).is_file)
+    if photo is None or not photo_exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="照片不存在")
+    return FileResponse(photo.file_path, media_type=photo.media_type)
+
+
+@router.get(
+    "/activities/{activity_id}/time-votes",
+    response_model=list[ActivityTimeVotePublic],
+)
+async def list_activity_time_votes(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[ActivityTimeVotePublic]:
+    if await confirmed_membership(session, activity_id, current_user.id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    votes = list(
+        (
+            await session.scalars(
+                select(ActivityTimeVote)
+                .where(ActivityTimeVote.activity_id == activity_id)
+                .order_by(ActivityTimeVote.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+    )
+    return [await time_vote_public(session, vote, current_user.id) for vote in votes]
+
+
+@router.post(
+    "/activities/{activity_id}/time-votes",
+    response_model=ActivityTimeVotePublic,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_activity_time_vote(
+    activity_id: str,
+    payload: ActivityTimeVoteCreate,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ActivityTimeVotePublic:
+    activity = await session.scalar(
+        select(Activity).where(Activity.id == activity_id).with_for_update()
+    )
+    membership = await confirmed_membership(session, activity_id, current_user.id)
+    if activity is None or membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
+    if activity.starts_at <= utcnow():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动开始后不能再发起改期")
+    existing = await session.scalar(
+        select(ActivityTimeVote.id).where(
+            ActivityTimeVote.activity_id == activity_id,
+            ActivityTimeVote.proposer_id == current_user.id,
+            ActivityTimeVote.status == "pending",
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="你已经有一项改期方案在等待大家表态。",
+        )
+    vote = ActivityTimeVote(
+        activity_id=activity.id,
+        proposer_id=current_user.id,
+        proposed_starts_at=payload.starts_at,
+        proposed_ends_at=payload.ends_at,
+    )
+    session.add(vote)
+    await session.flush()
+    member_count = int(
+        await session.scalar(
+            select(func.count(ActivityMember.id)).where(
+                ActivityMember.activity_id == activity.id,
+                ActivityMember.status == "confirmed",
+            )
+        )
+        or 0
+    )
+    if member_count == 1:
+        activity.starts_at = vote.proposed_starts_at
+        activity.ends_at = vote.proposed_ends_at
+        vote.status = "approved"
+        vote.resolved_at = utcnow()
+        await reschedule_activity_reminders(session, activity)
+    await session.commit()
+    return await time_vote_public(session, vote, current_user.id)
+
+
+@router.post(
+    "/activities/{activity_id}/time-votes/{vote_id}/respond",
+    response_model=ActivityTimeVotePublic,
+)
+async def respond_activity_time_vote(
+    activity_id: str,
+    vote_id: str,
+    payload: ActivityTimeVoteRespond,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> ActivityTimeVotePublic:
+    activity = await session.scalar(
+        select(Activity).where(Activity.id == activity_id).with_for_update()
+    )
+    vote = await session.scalar(
+        select(ActivityTimeVote)
+        .where(
+            ActivityTimeVote.id == vote_id,
+            ActivityTimeVote.activity_id == activity_id,
+        )
+        .with_for_update()
+    )
+    if (
+        activity is None
+        or vote is None
+        or await confirmed_membership(session, activity_id, current_user.id) is None
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="改期投票不存在")
+    if vote.status != "pending":
+        return await time_vote_public(session, vote, current_user.id)
+    if vote.proposer_id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="发起人已经默认同意该方案")
+    response = await session.scalar(
+        select(ActivityTimeVoteResponse).where(
+            ActivityTimeVoteResponse.vote_id == vote.id,
+            ActivityTimeVoteResponse.user_id == current_user.id,
+        )
+    )
+    if response is None:
+        response = ActivityTimeVoteResponse(
+            vote_id=vote.id,
+            user_id=current_user.id,
+            decision=payload.decision,
+        )
+        session.add(response)
+    else:
+        response.decision = payload.decision
+    await session.flush()
+
+    if payload.decision == "rejected":
+        vote.status = "rejected"
+        vote.resolved_at = utcnow()
+    else:
+        confirmed_ids = set(
+            (
+                await session.scalars(
+                    select(ActivityMember.user_id).where(
+                        ActivityMember.activity_id == activity.id,
+                        ActivityMember.status == "confirmed",
+                    )
+                )
+            ).all()
+        )
+        approvals = set(
+            (
+                await session.scalars(
+                    select(ActivityTimeVoteResponse.user_id).where(
+                        ActivityTimeVoteResponse.vote_id == vote.id,
+                        ActivityTimeVoteResponse.decision == "approved",
+                    )
+                )
+            ).all()
+        )
+        required = confirmed_ids - {vote.proposer_id}
+        if required.issubset(approvals):
+            activity.starts_at = vote.proposed_starts_at
+            activity.ends_at = vote.proposed_ends_at
+            vote.status = "approved"
+            vote.resolved_at = utcnow()
+            await session.execute(
+                update(ActivityTimeVote)
+                .where(
+                    ActivityTimeVote.activity_id == activity.id,
+                    ActivityTimeVote.status == "pending",
+                    ActivityTimeVote.id != vote.id,
+                )
+                .values(status="superseded", resolved_at=utcnow())
+            )
+            await reschedule_activity_reminders(session, activity)
+    await session.commit()
+    return await time_vote_public(session, vote, current_user.id)
 
 
 @router.post(
@@ -436,6 +1247,21 @@ async def preview_match(
     session: SessionDep,
     settings: SettingsDep,
 ) -> MatchPreviewResponse:
+    latest_request_at = await session.scalar(
+        select(func.max(MatchRequest.created_at)).where(
+            MatchRequest.requester_id == current_user.id,
+            MatchRequest.status != "failed",
+        )
+    )
+    if latest_request_at is not None:
+        next_available = latest_request_at + timedelta(seconds=MATCH_COOLDOWN_SECONDS)
+        if utcnow() < next_available:
+            retry_after = max(1, int((next_available - utcnow()).total_seconds()))
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Agent 正在歇口气，请 {retry_after} 秒后再找一次。",
+                headers={"Retry-After": str(retry_after)},
+            )
     match_request = MatchRequest(requester_id=current_user.id, **payload.model_dump())
     session.add(match_request)
     await session.flush()
@@ -458,7 +1284,21 @@ async def preview_match(
     )
     try:
         decision = await run_matching_agent(session, context, settings)
+    except AgentOutputError as exc:
+        match_request.status = "failed"
+        agent_run.status = "failed"
+        agent_run.error = str(exc)[:500]
+        agent_run.finished_at = utcnow()
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "agent_output_error",
+                "message": "这次 Agent 没能生成可用结果，刚才填写的内容将被清空，请重新填写。",
+            },
+        ) from exc
     except Exception as exc:
+        match_request.status = "failed"
         agent_run.status = "failed"
         agent_run.error = str(exc)[:500]
         agent_run.finished_at = utcnow()
@@ -896,6 +1736,8 @@ async def list_peer_review_tasks(
                 attendance=feedback.attendance,
                 rating=feedback.rating,
                 comment=feedback.comment,
+                skill_name=feedback.skill_name,
+                skill_level=feedback.skill_level,
                 personality_tags=feedback.personality_tags,
                 incident_tags=feedback.incident_tags,
                 ai_summary=feedback.ai_reason or "审核 Agent 希望获得同场参与者的补充信息。",

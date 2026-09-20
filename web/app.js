@@ -8,12 +8,22 @@ const state = {
   selectedUsers: new Set(),
   selectedActivity: null,
   activities: [],
+  squareItems: [],
+  squareOffset: 0,
+  squareHasMore: false,
   activityFilter: "upcoming",
   pendingLeave: null,
+  activeActivity: null,
+  timeVotes: [],
+  photoObjectUrls: [],
   peerTasks: [],
   runningTimer: null,
+  summaryTimer: null,
   toastTimer: null,
+  skillRowCounter: 0,
 };
+
+const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
 
 const elements = {
   authView: document.querySelector("#auth-view"),
@@ -46,12 +56,21 @@ const elements = {
   inviteBadge: document.querySelector("#invite-badge"),
   activityBadge: document.querySelector("#activity-badge"),
   activityList: document.querySelector("#activity-list"),
+  squareFilterForm: document.querySelector("#square-filter-form"),
+  squareList: document.querySelector("#square-list"),
+  squareLoadMore: document.querySelector("#square-load-more"),
   peerReviewSection: document.querySelector("#peer-review-section"),
   peerReviewList: document.querySelector("#peer-review-list"),
   peerTaskCount: document.querySelector("#peer-task-count"),
   profileForm: document.querySelector("#profile-form"),
   profileCredit: document.querySelector("#profile-credit"),
   profileStatus: document.querySelector("#profile-status"),
+  aiSummaryCopy: document.querySelector("#ai-summary-copy"),
+  aiSummaryCooldown: document.querySelector("#ai-summary-cooldown"),
+  generateSummaryButton: document.querySelector("#generate-summary-button"),
+  hobbySkillList: document.querySelector("#hobby-skill-list"),
+  addHobbySkillButton: document.querySelector("#add-hobby-skill"),
+  skillMarks: document.querySelector("#skill-marks"),
   agentModePill: document.querySelector("#agent-mode-pill"),
   leaveDialog: document.querySelector("#leave-dialog"),
   leaveDialogTitle: document.querySelector("#leave-dialog-title"),
@@ -62,11 +81,29 @@ const elements = {
   feedbackForm: document.querySelector("#feedback-form"),
   feedbackDialogTitle: document.querySelector("#feedback-dialog-title"),
   feedbackError: document.querySelector("#feedback-error"),
+  feedbackSkillFields: document.querySelector("#feedback-skill-fields"),
   peerReviewDialog: document.querySelector("#peer-review-dialog"),
   peerReviewForm: document.querySelector("#peer-review-form"),
   peerDialogTitle: document.querySelector("#peer-dialog-title"),
   peerDialogContext: document.querySelector("#peer-dialog-context"),
   peerReviewError: document.querySelector("#peer-review-error"),
+  timeVoteDialog: document.querySelector("#time-vote-dialog"),
+  timeVoteDialogTitle: document.querySelector("#time-vote-dialog-title"),
+  timeVoteForm: document.querySelector("#time-vote-form"),
+  timeVoteList: document.querySelector("#time-vote-list"),
+  timeVoteCount: document.querySelector("#time-vote-count"),
+  timeVoteError: document.querySelector("#time-vote-error"),
+  photoDialog: document.querySelector("#activity-photo-dialog"),
+  photoDialogTitle: document.querySelector("#activity-photo-dialog-title"),
+  photoForm: document.querySelector("#activity-photo-form"),
+  photoList: document.querySelector("#activity-photo-list"),
+  photoError: document.querySelector("#activity-photo-error"),
+  activityParticipantsDialog: document.querySelector("#activity-participants-dialog"),
+  activityParticipantsTitle: document.querySelector("#activity-participants-title"),
+  activityParticipantsSummary: document.querySelector("#activity-participants-summary"),
+  activityParticipantsList: document.querySelector("#activity-participants-list"),
+  userProfileDialog: document.querySelector("#user-profile-dialog"),
+  userProfileContent: document.querySelector("#user-profile-content"),
   toast: document.querySelector("#toast"),
 };
 
@@ -82,6 +119,7 @@ function escapeHtml(value) {
 function formatApiError(payload, fallback) {
   if (!payload) return fallback;
   if (typeof payload.detail === "string") return payload.detail;
+  if (typeof payload.detail?.message === "string") return payload.detail.message;
   if (Array.isArray(payload.detail)) {
     return payload.detail
       .map((item) => item.msg || "输入内容有误")
@@ -103,9 +141,23 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/auth/")) {
       logout(false);
     }
-    throw new Error(formatApiError(payload, `请求失败（${response.status}）`));
+    const error = new Error(formatApiError(payload, `请求失败（${response.status}）`));
+    error.status = response.status;
+    error.code = payload?.detail?.code || null;
+    throw error;
   }
   return payload;
+}
+
+async function apiBlob(path) {
+  const response = await fetch(`${API_ROOT}${path}`, {
+    headers: { Authorization: `Bearer ${state.token}` },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(formatApiError(payload, `请求失败（${response.status}）`));
+  }
+  return response.blob();
 }
 
 function setButtonLoading(button, loading, loadingText) {
@@ -240,6 +292,7 @@ async function handleRegister(event) {
   setButtonLoading(button, true, "正在创建账号…");
   const form = new FormData(elements.registerForm);
   const interests = form.getAll("interests");
+  const skillName = String(form.get("register_skill_name") || "").trim();
   if (!interests.length) {
     showInlineError(elements.authError, "至少选一个平时喜欢的活动，这样 Agent 才知道从哪里开始。 ");
     document.querySelector(".onboarding-choices").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -257,7 +310,11 @@ async function handleRegister(event) {
         campus: String(form.get("campus")).trim(),
         department: String(form.get("department")).trim(),
         grade_year: Number(form.get("grade_year")),
+        gender: form.get("gender"),
         interests,
+        hobby_skills: skillName
+          ? [{ name: skillName, level: Number(form.get("register_skill_level")) }]
+          : [],
         preferred_locations: splitList(form.get("preferred_locations")),
         social_style: form.get("social_style"),
       }),
@@ -285,6 +342,7 @@ function switchTab(tabName) {
   });
   if (tabName === "invitations") loadInvitations();
   if (tabName === "activities") loadActivities();
+  if (tabName === "square") loadSquare(false);
   if (tabName === "profile") populateProfileForm();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -345,6 +403,24 @@ function getCategory(form) {
   return custom || form.get("category");
 }
 
+function clearMatchRequestAfterAgentError() {
+  state.preview = null;
+  state.selectedUsers.clear();
+  state.selectedActivity = null;
+  elements.matchForm.reset();
+  elements.matchForm.querySelectorAll("input[name='category']").forEach((input) => {
+    input.checked = false;
+  });
+  elements.matchForm.elements.custom_category.value = "";
+  elements.matchForm.elements.location.value = "";
+  elements.matchForm.elements.people_needed.value = "2";
+  elements.matchForm.elements.title.value = "";
+  elements.matchForm.elements.personal_requirement.value = "";
+  initializeDates();
+  setResultView("empty");
+  elements.matchForm.querySelector("input[name='category']")?.focus();
+}
+
 async function handleMatch(event) {
   event.preventDefault();
   hideInlineError(elements.matchError);
@@ -375,7 +451,12 @@ async function handleMatch(event) {
     window.setTimeout(() => setResultView("content"), 180);
   } catch (error) {
     window.clearInterval(state.runningTimer);
-    setResultView("empty");
+    if (error.code === "agent_output_error") {
+      clearMatchRequestAfterAgentError();
+      showToast("Agent 没有完成匹配，刚才填写的内容已清空");
+    } else {
+      setResultView("empty");
+    }
     showInlineError(elements.matchError, error.message);
   } finally {
     setButtonLoading(elements.matchSubmit, false);
@@ -428,6 +509,38 @@ function formatDate(value) {
   }).format(new Date(value));
 }
 
+function genderInfo(gender) {
+  return {
+    male: { symbol: "♂", label: "男", className: "gender-male" },
+    female: { symbol: "♀", label: "女", className: "gender-female" },
+    undisclosed: { symbol: "—", label: "不公开", className: "gender-undisclosed" },
+  }[gender] || { symbol: "—", label: "不公开", className: "gender-undisclosed" };
+}
+
+function genderBadge(gender) {
+  const info = genderInfo(gender);
+  return `<span class="gender-badge ${info.className}"><b aria-hidden="true">${info.symbol}</b>${info.label}</span>`;
+}
+
+function personProfileTag(user, compact = false) {
+  const info = genderInfo(user.gender);
+  return `<button class="person-profile-tag ${info.className} ${compact ? "is-compact" : ""}" type="button" data-user-profile="${escapeHtml(user.id)}" aria-label="查看${escapeHtml(user.display_name)}的个人主页">
+    <span class="person-symbol" aria-hidden="true">${info.symbol}</span>
+    <span><strong>${escapeHtml(user.display_name)}</strong><small>${escapeHtml(info.label)} · 查看主页</small></span>
+  </button>`;
+}
+
+function activityGenderSummary(activity, interactive = true) {
+  const counts = activity.gender_counts || {};
+  const undisclosedCount = Number(counts.undisclosed || 0);
+  const content = `<span class="gender-count gender-male"><b aria-hidden="true">♂</b> 男 ${Number(counts.male || 0)}</span>
+    <span class="gender-count gender-female"><b aria-hidden="true">♀</b> 女 ${Number(counts.female || 0)}</span>
+    ${undisclosedCount ? `<span class="gender-count gender-undisclosed"><b aria-hidden="true">—</b> 不公开 ${undisclosedCount}</span>` : ""}
+    ${interactive ? "<small>查看成员 →</small>" : ""}`;
+  if (!interactive) return content;
+  return `<button class="activity-gender-summary" type="button" data-activity-participants="${escapeHtml(activity.id)}" data-activity-title="${escapeHtml(activity.title)}" aria-label="查看${escapeHtml(activity.title)}的参与者">${content}</button>`;
+}
+
 function userCandidateCopy(candidate) {
   const user = candidate.user;
   const meta = [user.department, user.grade_year ? `${user.grade_year} 年级` : null, `信用 ${user.credit_score}`]
@@ -467,19 +580,30 @@ function renderCandidates() {
         .slice(0, 4)
         .map((reason) => `<span>${escapeHtml(reason)}</span>`)
         .join("");
+      const skillMarks = (candidate.user?.skill_marks || [])
+        .slice(0, 2)
+        .map(
+          (mark) => `<span class="candidate-system-mark">系统提醒 · ${escapeHtml(mark.name)}：${escapeHtml(mark.label)}</span>`,
+        )
+        .join("");
+      const userHeading = candidate.user
+        ? personProfileTag(candidate.user)
+        : `<div class="candidate-title-row"><strong>${escapeHtml(copy.title)}</strong><span class="candidate-kind">${escapeHtml(copy.kind)}</span></div>`;
+      const genderSummary = candidate.activity
+        ? activityGenderSummary(candidate.activity)
+        : "";
       return `
-        <label class="candidate-card" data-type="${candidate.candidate_type}" data-id="${escapeHtml(candidate.candidate_id)}">
-          <input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" />
+        <article class="candidate-card" data-type="${candidate.candidate_type}" data-id="${escapeHtml(candidate.candidate_id)}">
+          <input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" aria-label="选择${escapeHtml(copy.title)}" />
           <div class="candidate-main">
-            <div class="candidate-title-row">
-              <strong>${escapeHtml(copy.title)}</strong>
-              <span class="candidate-kind">${escapeHtml(copy.kind)}</span>
-            </div>
+            ${userHeading}
             <p class="candidate-meta">${escapeHtml(copy.meta)}</p>
+            ${genderSummary}
             <div class="candidate-reasons">${reasons}</div>
+            ${skillMarks ? `<div class="candidate-system-marks">${skillMarks}</div>` : ""}
           </div>
           <div class="candidate-score">${escapeHtml(candidate.score)}<small>匹配分</small></div>
-        </label>`;
+        </article>`;
     })
     .join("");
 }
@@ -519,6 +643,19 @@ function updateSelectionSummary() {
 }
 
 function handleCandidateSelection(event) {
+  const profileButton = event.target.closest("[data-user-profile]");
+  if (profileButton) {
+    openUserProfile(profileButton.dataset.userProfile);
+    return;
+  }
+  const participantButton = event.target.closest("[data-activity-participants]");
+  if (participantButton) {
+    openActivityParticipants(
+      participantButton.dataset.activityParticipants,
+      participantButton.dataset.activityTitle,
+    );
+    return;
+  }
   const card = event.target.closest(".candidate-card");
   if (!card) return;
   const candidateId = card.dataset.id;
@@ -581,6 +718,78 @@ function resetMatchResult() {
   elements.matchForm.querySelector("textarea[name='personal_requirement']").focus();
 }
 
+async function loadSquare(append = false) {
+  if (!state.token) return;
+  const form = new FormData(elements.squareFilterForm);
+  const params = new URLSearchParams({
+    sort: String(form.get("sort") || "recommended"),
+    offset: String(append ? state.squareOffset : 0),
+    limit: "12",
+  });
+  const category = String(form.get("category") || "").trim();
+  const location = String(form.get("location") || "").trim();
+  if (category) params.set("category", category);
+  if (location) params.set("location", location);
+  if (!append) {
+    elements.squareList.innerHTML = `<div class="empty-list">正在把活动摊开给你看…</div>`;
+  }
+  elements.squareLoadMore.disabled = true;
+  try {
+    const page = await api(`/activities/square?${params.toString()}`);
+    state.squareItems = append ? [...state.squareItems, ...page.items] : page.items;
+    state.squareOffset = page.next_offset ?? state.squareItems.length;
+    state.squareHasMore = page.has_more;
+    renderSquare();
+  } catch (error) {
+    if (!append) elements.squareList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+  } finally {
+    elements.squareLoadMore.disabled = false;
+  }
+}
+
+function renderSquare() {
+  elements.squareLoadMore.classList.toggle("is-hidden", !state.squareHasMore);
+  if (!state.squareItems.length) {
+    elements.squareList.innerHTML = `<div class="empty-list empty-list-playful"><strong>暂时没有符合筛选条件的活动，换个地点或类型看看吧。</strong></div>`;
+    return;
+  }
+  elements.squareList.innerHTML = state.squareItems
+    .map((item) => {
+      const activity = item.activity;
+      const reasons = item.recommendation_reasons
+        .map((reason) => `<span>${escapeHtml(reason)}</span>`)
+        .join("");
+      const action = item.joined
+        ? `<button class="button button-quiet" type="button" disabled>已经加入</button>`
+        : item.joinable
+          ? `<button class="button button-primary" type="button" data-join-square="${escapeHtml(activity.id)}">加入这场</button>`
+          : `<button class="button button-quiet" type="button" disabled>已经满员</button>`;
+      return `<article class="square-card">
+        <div class="square-card-top"><span class="activity-role">${escapeHtml(activity.category)}</span><span class="square-score">适合度 ${escapeHtml(item.recommendation_score)}</span></div>
+        <h2>${escapeHtml(activity.title)}</h2>
+        <p class="square-time">${escapeHtml(formatDate(activity.starts_at))}</p>
+        <p class="square-location">${escapeHtml(activity.location)} · ${activity.participant_count}/${activity.capacity} 人</p>
+        ${activityGenderSummary(activity)}
+        ${activity.description ? `<p class="square-description">${escapeHtml(activity.description)}</p>` : ""}
+        <div class="candidate-reasons">${reasons}</div>
+        <div class="square-card-action">${action}</div>
+      </article>`;
+    })
+    .join("");
+}
+
+async function joinSquareActivity(button) {
+  setButtonLoading(button, true, "正在加入…");
+  try {
+    const result = await api(`/activities/${button.dataset.joinSquare}/join`, { method: "POST" });
+    showToast(result.message);
+    await Promise.all([loadSquare(false), loadActivities(true)]);
+  } catch (error) {
+    showToast(error.message);
+    setButtonLoading(button, false);
+  }
+}
+
 function invitationStatusLabel(status) {
   const labels = {
     pending: ["待处理", ""],
@@ -628,6 +837,7 @@ function renderInvitations(invitations) {
           </div>
           <p>${escapeHtml(invitation.inviter.display_name)} 邀请你 · ${escapeHtml(formatDate(invitation.activity.starts_at))}</p>
           <p>${escapeHtml(invitation.activity.location)} · ${escapeHtml(invitation.activity.category)}</p>
+          ${activityGenderSummary(invitation.activity)}
         </div>
         ${actions}
       </article>`;
@@ -636,6 +846,14 @@ function renderInvitations(invitations) {
 }
 
 async function respondInvitation(event) {
+  const participantButton = event.target.closest("[data-activity-participants]");
+  if (participantButton) {
+    openActivityParticipants(
+      participantButton.dataset.activityParticipants,
+      participantButton.dataset.activityTitle,
+    );
+    return;
+  }
   const button = event.target.closest("button[data-invitation-id]");
   if (!button) return;
   setButtonLoading(button, true, button.dataset.decision === "accepted" ? "正在接受…" : "正在拒绝…");
@@ -722,6 +940,13 @@ function renderActivities() {
           (target) => `<button class="button button-accent" type="button" data-feedback-activity="${escapeHtml(activity.id)}" data-feedback-user="${escapeHtml(target.id)}">评价 ${escapeHtml(target.display_name)}</button>`,
         )
         .join("");
+      const beforeStart = Date.now() < new Date(activity.starts_at).getTime();
+      const beforeEnd = Date.now() < new Date(activity.ends_at).getTime();
+      const activityTools = item.membership_status === "confirmed"
+        ? `<button class="button button-quiet" type="button" data-calendar-activity="${escapeHtml(activity.id)}">导入日历</button>
+           ${beforeStart ? `<button class="button button-quiet" type="button" data-time-vote-activity="${escapeHtml(activity.id)}">商量改时间</button>` : ""}
+           ${beforeEnd ? `<button class="button button-quiet" type="button" data-photo-activity="${escapeHtml(activity.id)}">集合照片</button>` : ""}`
+        : "";
       const policy = item.can_leave
         ? `<p class="leave-hint">${escapeHtml(item.leave_policy_message)}</p>`
         : "";
@@ -736,9 +961,10 @@ function renderActivities() {
             <span class="status-label ${statusClass}">${escapeHtml(statusText)}</span>
           </div>
           <p class="activity-meta"><b>${escapeHtml(formatDate(activity.starts_at))}</b><span>${escapeHtml(activity.location)}</span><span>${escapeHtml(activity.category)} · ${activity.participant_count}/${activity.capacity} 人</span></p>
+          ${activityGenderSummary(activity)}
           ${policy}
           ${item.needs_feedback ? `<div class="review-callout"><strong>趁记忆还热，给搭子留一句真实反馈</strong><span>审核 Agent 会先检查，不会直接凭一条评价重罚。</span></div>` : ""}
-          <div class="activity-actions">${feedbackActions}${leaveAction}</div>
+          <div class="activity-actions">${feedbackActions}${activityTools}${leaveAction}</div>
         </div>
       </article>`;
     })
@@ -777,6 +1003,202 @@ async function confirmLeaveActivity() {
   }
 }
 
+async function importActivityCalendar(activityId) {
+  try {
+    const blob = await apiBlob(`/activities/${activityId}/calendar.ics`);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "搭子活动.ics";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("日历文件已生成，打开它就能加入手机日历");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function openTimeVoteDialog(activityId) {
+  const item = state.activities.find((entry) => entry.activity.id === activityId);
+  if (!item) return;
+  state.activeActivity = item;
+  elements.timeVoteForm.reset();
+  hideInlineError(elements.timeVoteError);
+  elements.timeVoteForm.elements.activity_id.value = activityId;
+  elements.timeVoteForm.elements.starts_at.value = toLocalInputValue(new Date(item.activity.starts_at));
+  elements.timeVoteForm.elements.ends_at.value = toLocalInputValue(new Date(item.activity.ends_at));
+  elements.timeVoteDialogTitle.textContent = `“${item.activity.title}”改到几点？`;
+  elements.timeVoteList.innerHTML = `<div class="empty-list">正在看看大家的方案…</div>`;
+  elements.timeVoteDialog.showModal();
+  await loadTimeVotes(activityId);
+}
+
+async function loadTimeVotes(activityId) {
+  try {
+    state.timeVotes = await api(`/activities/${activityId}/time-votes`);
+    renderTimeVotes();
+  } catch (error) {
+    elements.timeVoteList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderTimeVotes() {
+  elements.timeVoteCount.textContent = `${state.timeVotes.length} 项`;
+  if (!state.timeVotes.length) {
+    elements.timeVoteList.innerHTML = `<div class="empty-list">还没有改期方案，你可以提出第一个。</div>`;
+    return;
+  }
+  const statusLabels = {
+    pending: "等待表态",
+    approved: "已通过",
+    rejected: "未通过",
+    superseded: "已有其他方案通过",
+  };
+  elements.timeVoteList.innerHTML = state.timeVotes
+    .map((vote) => {
+      const isMine = vote.proposer.id === state.user.id;
+      const canRespond = vote.status === "pending" && !isMine && !vote.my_decision;
+      const progress = vote.required_approvals === 0
+        ? "无需等待其他人"
+        : `已同意 ${vote.approvals}/${vote.required_approvals}`;
+      return `<article class="time-vote-card">
+        <div><strong>${escapeHtml(vote.proposer.display_name)} 提议</strong><span class="status-label ${vote.status === "approved" ? "is-success" : ""}">${escapeHtml(statusLabels[vote.status] || vote.status)}</span></div>
+        <p>${escapeHtml(formatDate(vote.proposed_starts_at))} — ${escapeHtml(formatDate(vote.proposed_ends_at))}</p>
+        <small>${escapeHtml(progress)}${vote.my_decision ? ` · 你已${vote.my_decision === "approved" ? "同意" : "不同意"}` : ""}</small>
+        ${canRespond ? `<div class="activity-actions"><button class="button button-quiet" type="button" data-vote-id="${escapeHtml(vote.id)}" data-vote-decision="rejected">不同意</button><button class="button button-primary" type="button" data-vote-id="${escapeHtml(vote.id)}" data-vote-decision="approved">同意改期</button></div>` : ""}
+      </article>`;
+    })
+    .join("");
+}
+
+async function submitTimeVote(event) {
+  event.preventDefault();
+  hideInlineError(elements.timeVoteError);
+  const button = event.submitter;
+  const form = new FormData(elements.timeVoteForm);
+  const activityId = form.get("activity_id");
+  setButtonLoading(button, true, "正在发起…");
+  try {
+    await api(`/activities/${activityId}/time-votes`, {
+      method: "POST",
+      body: JSON.stringify({
+        starts_at: new Date(form.get("starts_at")).toISOString(),
+        ends_at: new Date(form.get("ends_at")).toISOString(),
+      }),
+    });
+    showToast("改期方案已发出，等其他搭子表态");
+    await Promise.all([loadTimeVotes(activityId), loadActivities(true)]);
+  } catch (error) {
+    showInlineError(elements.timeVoteError, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function respondTimeVote(button) {
+  const activityId = state.activeActivity?.activity.id;
+  if (!activityId) return;
+  setButtonLoading(button, true, button.dataset.voteDecision === "approved" ? "正在同意…" : "正在提交…");
+  try {
+    const vote = await api(
+      `/activities/${activityId}/time-votes/${button.dataset.voteId}/respond`,
+      { method: "POST", body: JSON.stringify({ decision: button.dataset.voteDecision }) },
+    );
+    showToast(vote.status === "approved" ? "全员同意，活动时间已经更新" : "你的选择已记录");
+    await Promise.all([loadTimeVotes(activityId), loadActivities(true)]);
+  } catch (error) {
+    showToast(error.message);
+    setButtonLoading(button, false);
+  }
+}
+
+function revokePhotoUrls() {
+  state.photoObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.photoObjectUrls = [];
+}
+
+async function openPhotoDialog(activityId) {
+  const item = state.activities.find((entry) => entry.activity.id === activityId);
+  if (!item) return;
+  state.activeActivity = item;
+  elements.photoForm.reset();
+  hideInlineError(elements.photoError);
+  elements.photoForm.elements.activity_id.value = activityId;
+  elements.photoDialogTitle.textContent = `“${item.activity.title}”集合照片`;
+  const opensAt = new Date(item.activity.starts_at).getTime() - 15 * 60 * 1000;
+  const uploadButton = elements.photoForm.querySelector("button[type='submit']");
+  const tooEarly = Date.now() < opensAt;
+  elements.photoForm.elements.photo.disabled = tooEarly;
+  uploadButton.disabled = tooEarly;
+  if (tooEarly) {
+    showInlineError(elements.photoError, `上传入口将在 ${formatDate(new Date(opensAt).toISOString())} 开放。`);
+  }
+  elements.photoList.innerHTML = `<div class="empty-list">正在加载搭子们看到的照片…</div>`;
+  elements.photoDialog.showModal();
+  await loadActivityPhotos(activityId);
+}
+
+async function loadActivityPhotos(activityId) {
+  revokePhotoUrls();
+  try {
+    const photos = await api(`/activities/${activityId}/photos`);
+    if (!photos.length) {
+      elements.photoList.innerHTML = `<div class="empty-list">还没有照片。接近集合时间时，拍一张周围环境给搭子看吧。</div>`;
+      return;
+    }
+    const cards = await Promise.all(
+      photos.map(async (photo) => {
+        const blob = await apiBlob(photo.content_url.replace(API_ROOT, ""));
+        const url = URL.createObjectURL(blob);
+        state.photoObjectUrls.push(url);
+        return `<figure class="activity-photo"><img src="${url}" alt="${escapeHtml(photo.uploader.display_name)} 上传的集合环境照片" /><figcaption>${escapeHtml(photo.uploader.display_name)} · ${escapeHtml(formatDate(photo.uploaded_at))}</figcaption></figure>`;
+      }),
+    );
+    elements.photoList.innerHTML = cards.join("");
+  } catch (error) {
+    elements.photoList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("照片读取失败，请重新选择"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadActivityPhoto(event) {
+  event.preventDefault();
+  hideInlineError(elements.photoError);
+  const button = event.submitter;
+  const file = elements.photoForm.elements.photo.files[0];
+  const activityId = elements.photoForm.elements.activity_id.value;
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) {
+    showInlineError(elements.photoError, "单张图片不能超过 5 MB。 ");
+    return;
+  }
+  setButtonLoading(button, true, "正在上传…");
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    await api(`/activities/${activityId}/photos`, {
+      method: "POST",
+      body: JSON.stringify({ data_url: dataUrl }),
+    });
+    elements.photoForm.elements.photo.value = "";
+    showToast("照片已同步给这场活动的搭子");
+    await loadActivityPhotos(activityId);
+  } catch (error) {
+    showInlineError(elements.photoError, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
 function openFeedbackDialog(activityId, userId) {
   const item = state.activities.find((entry) => entry.activity.id === activityId);
   const target = item?.feedback_targets.find((user) => user.id === userId);
@@ -785,6 +1207,10 @@ function openFeedbackDialog(activityId, userId) {
   hideInlineError(elements.feedbackError);
   elements.feedbackForm.elements.activity_id.value = activityId;
   elements.feedbackForm.elements.reviewee_id.value = userId;
+  elements.feedbackForm.elements.skill_name.value = item.activity.category || "";
+  elements.feedbackForm.elements.skill_level.value = "3";
+  updateLevelOutput(elements.feedbackForm.elements.skill_level);
+  toggleFeedbackSkillFields(false);
   elements.feedbackDialogTitle.textContent = `这次和 ${target.display_name} 搭得怎么样？`;
   elements.feedbackDialog.showModal();
 }
@@ -800,6 +1226,10 @@ async function submitFeedback(event) {
     attendance: form.get("attendance"),
     rating: Number(form.get("rating")),
     comment: String(form.get("comment") || "").trim() || null,
+    skill_name: form.get("evaluate_skill")
+      ? String(form.get("skill_name") || "").trim() || null
+      : null,
+    skill_level: form.get("evaluate_skill") ? Number(form.get("skill_level")) : null,
     personality_tags: form.getAll("personality_tags"),
     incident_tags: form.getAll("incident_tags"),
   };
@@ -824,6 +1254,7 @@ function renderPeerReviewTasks() {
       (task) => `<article class="peer-task-card">
         <div><span class="activity-role">${escapeHtml(task.activity.title)}</span><h3>${escapeHtml(task.author.display_name)} 对 ${escapeHtml(task.subject.display_name)} 的评价</h3></div>
         <blockquote>“${escapeHtml(task.comment || "没有填写文字说明") }”</blockquote>
+        ${task.skill_name ? `<p class="peer-skill-note">水平评价：${escapeHtml(task.skill_name)} · ${escapeHtml(LEVEL_LABELS[task.skill_level] || task.skill_level)}</p>` : ""}
         <p>${escapeHtml(task.ai_summary)}</p>
         <button class="button button-primary" type="button" data-peer-task="${escapeHtml(task.feedback_id)}">我来补充现场情况</button>
       </article>`,
@@ -838,7 +1269,10 @@ function openPeerReviewDialog(feedbackId) {
   hideInlineError(elements.peerReviewError);
   elements.peerReviewForm.elements.feedback_id.value = feedbackId;
   elements.peerDialogTitle.textContent = `${task.activity.title} · 帮忙还原情况`;
-  elements.peerDialogContext.textContent = `${task.author.display_name} 给 ${task.subject.display_name} 打了 ${task.rating} 分。${task.ai_summary}`;
+  const skillCopy = task.skill_name
+    ? `同时认为其“${task.skill_name}”水平为${LEVEL_LABELS[task.skill_level] || task.skill_level}。`
+    : "";
+  elements.peerDialogContext.textContent = `${task.author.display_name} 给 ${task.subject.display_name} 打了 ${task.rating} 分。${skillCopy}${task.ai_summary}`;
   elements.peerReviewDialog.showModal();
 }
 
@@ -870,6 +1304,131 @@ async function submitPeerReview(event) {
   }
 }
 
+function profileChipList(items, emptyCopy = "暂未填写") {
+  if (!items.length) return `<p class="profile-empty-copy">${escapeHtml(emptyCopy)}</p>`;
+  return `<div class="profile-chip-list">${items
+    .map((item) => `<span>${escapeHtml(item)}</span>`)
+    .join("")}</div>`;
+}
+
+function renderUserProfilePage(page) {
+  const user = page.user;
+  const system = page.system_profile;
+  const gradeLabels = ["", "大一", "大二", "大三", "大四", "研一", "研二", "研三", "博士生"];
+  const styleLabels = { quiet: "偏安静", balanced: "都可以", outgoing: "偏外向" };
+  const attendanceLabels = {
+    attended: "正常参加",
+    late_cancel: "临近取消",
+    no_show: "未到场",
+  };
+  const incidentLabels = {
+    punctual: "准时到场",
+    helpful: "乐于帮忙",
+    clear_communication: "沟通清楚",
+    late: "有迟到",
+    cancelled: "临时取消",
+    no_show: "未到场",
+    unsafe_behavior: "存在安全风险",
+    skill_level_mismatch: "爱好水平存在争议",
+    suspected_smurfing: "疑似高手低报",
+  };
+  const skills = (user.hobby_skills || []).map(
+    (skill) => `${skill.name} · ${levelLabel(skill.level)}`,
+  );
+  const activitySignals = (system.activity_signals || []).map(
+    (item) => `${item.category} ${item.count} 次`,
+  );
+  const personalitySignals = (system.personality_signals || []).map(
+    (item) => `${item.label} · ${item.count} 人次反馈`,
+  );
+  const attendanceSignals = Object.entries(system.attendance_signals || {})
+    .filter(([, count]) => count)
+    .map(([key, count]) => `${attendanceLabels[key] || key} ${count} 次`);
+  const incidentSignals = Object.entries(system.incident_signals || {})
+    .filter(([, count]) => count)
+    .map(([key, count]) => `${incidentLabels[key] || key} ${count} 次`);
+  const systemMarks = (system.skill_marks || [])
+    .map((mark) => `<div class="profile-system-alert"><strong>${escapeHtml(mark.name)}</strong><span>${escapeHtml(mark.label)} · ${escapeHtml(mark.feedback_count)} 条有效反馈</span></div>`)
+    .join("");
+  elements.userProfileContent.innerHTML = `
+    <header class="profile-dialog-hero">
+      <div>
+        <div class="profile-identity-row"><h2>${escapeHtml(user.display_name)}</h2>${genderBadge(user.gender)}</div>
+        <p>${escapeHtml([user.department, gradeLabels[user.grade_year], user.campus].filter(Boolean).join(" · ") || user.university)}</p>
+      </div>
+      <div class="profile-credit-badge"><span>搭子信用</span><strong>${escapeHtml(user.credit_score)}</strong></div>
+    </header>
+    <section class="profile-page-section">
+      <div class="profile-section-heading"><span>本人填写</span><h3>TA 介绍的自己</h3></div>
+      <p class="profile-bio">${escapeHtml(user.bio || "TA 还没有写自我介绍。")}</p>
+      <div class="profile-fact-grid">
+        <div><small>兴趣</small>${profileChipList(user.interests || [])}</div>
+        <div><small>爱好与特长水平</small>${profileChipList(skills)}</div>
+        <div><small>常去地点</small>${profileChipList(user.preferred_locations || [])}</div>
+        <div><small>相处偏好</small><p>${escapeHtml(styleLabels[user.social_style] || "未填写")} · 喜欢 ${escapeHtml(user.preferred_group_min)}–${escapeHtml(user.preferred_group_max)} 人的小组</p></div>
+      </div>
+    </section>
+    <section class="profile-page-section system-profile-section">
+      <div class="profile-section-heading"><span>系统画像</span><h3>活动与评价形成的印象</h3></div>
+      <p class="profile-system-note">这些内容由活动记录和通过审核的评价自动整理，TA 不能直接修改。</p>
+      <div class="profile-metrics">
+        <div><strong>${escapeHtml(system.completed_activity_count)}</strong><span>已完成活动</span></div>
+        <div><strong>${system.average_rating == null ? "—" : escapeHtml(system.average_rating)}</strong><span>平均评分</span></div>
+        <div><strong>${escapeHtml(system.finalized_feedback_count)}</strong><span>有效评价</span></div>
+      </div>
+      <blockquote class="profile-system-summary">${escapeHtml(system.summary)}</blockquote>
+      <div class="profile-fact-grid">
+        <div><small>常参加的活动</small>${profileChipList(activitySignals, "还没有稳定记录")}</div>
+        <div><small>他人印象</small>${profileChipList(personalitySignals, "评价还不够多")}</div>
+        <div><small>到场记录</small>${profileChipList(attendanceSignals, "暂时没有到场反馈")}</div>
+        <div><small>事实反馈</small>${profileChipList(incidentSignals, "暂时没有特别记录")}</div>
+      </div>
+      ${systemMarks ? `<div class="profile-system-alerts">${systemMarks}</div>` : ""}
+      <p class="profile-review-integrity">评价可信记录：${escapeHtml(system.review_integrity.supported_feedback_count || 0)} 条获同场复核支持，${escapeHtml(system.review_integrity.unsupported_serious_feedback_count || 0)} 条严重评价被判定缺乏依据。</p>
+    </section>`;
+}
+
+async function openUserProfile(userId) {
+  elements.userProfileContent.innerHTML = `<div class="profile-dialog-loading">正在翻开这位搭子的主页…</div>`;
+  if (!elements.userProfileDialog.open) elements.userProfileDialog.showModal();
+  try {
+    const page = await api(`/users/${userId}/profile`);
+    renderUserProfilePage(page);
+  } catch (error) {
+    elements.userProfileContent.innerHTML = `<div class="profile-dialog-loading"><strong>主页暂时打不开</strong><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+async function openActivityParticipants(activityId, activityTitle = "这场活动") {
+  elements.activityParticipantsTitle.textContent = `“${activityTitle || "这场活动"}”的参与者`;
+  elements.activityParticipantsSummary.innerHTML = "";
+  elements.activityParticipantsList.innerHTML = `<div class="profile-dialog-loading">正在读取参与者…</div>`;
+  if (!elements.activityParticipantsDialog.open) {
+    elements.activityParticipantsDialog.showModal();
+  }
+  try {
+    const users = await api(`/activities/${activityId}/participants`);
+    const genderCounts = { male: 0, female: 0, undisclosed: 0 };
+    users.forEach((user) => {
+      const key = Object.hasOwn(genderCounts, user.gender) ? user.gender : "undisclosed";
+      genderCounts[key] += 1;
+    });
+    elements.activityParticipantsSummary.innerHTML = activityGenderSummary(
+      { gender_counts: genderCounts },
+      false,
+    );
+    elements.activityParticipantsList.innerHTML = users.length
+      ? users.map((user) => `<article class="participant-profile-card">
+          ${personProfileTag(user, true)}
+          <p>${escapeHtml([user.department, user.grade_year ? `${user.grade_year} 年级` : null].filter(Boolean).join(" · ") || "暂未填写院系与年级")}</p>
+          ${profileChipList((user.hobby_skills || []).slice(0, 3).map((skill) => `${skill.name} · ${levelLabel(skill.level)}`), "还没有填写爱好水平")}
+        </article>`).join("")
+      : `<div class="profile-dialog-loading">暂时还没有参与者。</div>`;
+  } catch (error) {
+    elements.activityParticipantsList.innerHTML = `<div class="profile-dialog-loading"><strong>参与者列表暂时打不开</strong><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
 function populateProfileForm() {
   if (!state.user) return;
   const form = elements.profileForm.elements;
@@ -877,6 +1436,7 @@ function populateProfileForm() {
   form.campus.value = state.user.campus || "";
   form.department.value = state.user.department || "";
   form.grade_year.value = state.user.grade_year || "";
+  form.gender.value = state.user.gender || "undisclosed";
   form.bio.value = state.user.bio || "";
   form.interests.value = (state.user.interests || []).join("，");
   form.preferred_locations.value = (state.user.preferred_locations || []).join("，");
@@ -884,6 +1444,111 @@ function populateProfileForm() {
   form.preferred_group_min.value = state.user.preferred_group_min || 2;
   form.preferred_group_max.value = state.user.preferred_group_max || 6;
   elements.profileCredit.textContent = String(state.user.credit_score);
+  renderHobbySkillEditor(state.user.hobby_skills || []);
+  renderSkillMarks(state.user.skill_marks || []);
+  renderAiSummary();
+}
+
+function levelLabel(level) {
+  return LEVEL_LABELS[Number(level)] || "未填写";
+}
+
+function updateLevelOutput(input) {
+  if (!input) return;
+  const output = input.closest(".level-control")?.querySelector("[data-level-output]");
+  if (output) output.textContent = levelLabel(input.value);
+  input.setAttribute("aria-valuetext", levelLabel(input.value));
+}
+
+function hobbySkillRow(skill = { name: "", level: 1 }) {
+  state.skillRowCounter += 1;
+  const rowId = `hobby-skill-${state.skillRowCounter}`;
+  const level = Math.max(1, Math.min(5, Number(skill.level) || 1));
+  return `<div class="hobby-skill-row" data-skill-row>
+    <label for="${rowId}-name">爱好或特长<input id="${rowId}-name" data-skill-name type="text" maxlength="40" value="${escapeHtml(skill.name || "")}" placeholder="例如：羽毛球" /></label>
+    <label class="level-control" for="${rowId}-level">
+      <span>水平 <output data-level-output>${escapeHtml(levelLabel(level))}</output></span>
+      <input id="${rowId}-level" data-skill-level data-level-slider type="range" min="1" max="5" value="${level}" step="1" aria-valuetext="${escapeHtml(levelLabel(level))}" />
+      <span class="level-scale" aria-hidden="true"><small>小白</small><small>入门</small><small>熟练</small><small>擅长</small><small>精通</small></span>
+    </label>
+    <button class="skill-remove" type="button" data-remove-skill aria-label="删除${escapeHtml(skill.name || "这一项")}">×</button>
+  </div>`;
+}
+
+function renderHobbySkillEditor(skills) {
+  if (!skills.length) {
+    elements.hobbySkillList.innerHTML = `<p class="skill-empty">还没填写。可以从最常参加的一项开始，水平以后随时能改。</p>`;
+    return;
+  }
+  elements.hobbySkillList.innerHTML = skills.map(hobbySkillRow).join("");
+}
+
+function addHobbySkill(skill = { name: "", level: 1 }) {
+  elements.hobbySkillList.querySelector(".skill-empty")?.remove();
+  elements.hobbySkillList.insertAdjacentHTML("beforeend", hobbySkillRow(skill));
+  elements.hobbySkillList.lastElementChild?.querySelector("[data-skill-name]")?.focus();
+}
+
+function collectHobbySkills() {
+  return [...elements.hobbySkillList.querySelectorAll("[data-skill-row]")]
+    .map((row) => ({
+      name: row.querySelector("[data-skill-name]").value.trim(),
+      level: Number(row.querySelector("[data-skill-level]").value),
+    }))
+    .filter((skill) => skill.name);
+}
+
+function renderSkillMarks(marks) {
+  elements.skillMarks.classList.toggle("is-hidden", marks.length === 0);
+  elements.skillMarks.innerHTML = marks.length
+    ? `<strong>系统根据多人反馈给出的提醒</strong>${marks
+      .map(
+        (mark) => `<div class="skill-mark ${mark.flag_type === "possible_smurfing" ? "is-smurfing" : ""}"><span>${escapeHtml(mark.name)}</span><p>${escapeHtml(mark.label)}（${escapeHtml(mark.feedback_count)} 条有效反馈）</p></div>`,
+      )
+      .join("")}`
+    : "";
+}
+
+function toggleFeedbackSkillFields(show) {
+  elements.feedbackSkillFields.classList.toggle("is-hidden", !show);
+  elements.feedbackSkillFields.querySelectorAll("input").forEach((input) => {
+    input.disabled = !show;
+  });
+}
+
+function renderAiSummary() {
+  if (!state.user) return;
+  window.clearTimeout(state.summaryTimer);
+  elements.aiSummaryCopy.textContent = state.user.ai_summary
+    || "点击生成后，AI 会综合你的资料和已有活动反馈，写一段只给你看的总结。";
+  const generatedAt = state.user.ai_summary_generated_at
+    ? new Date(state.user.ai_summary_generated_at).getTime()
+    : 0;
+  const remaining = Math.ceil((generatedAt + 5 * 60 * 1000 - Date.now()) / 1000);
+  if (remaining > 0) {
+    elements.generateSummaryButton.disabled = true;
+    elements.aiSummaryCooldown.textContent = `${Math.ceil(remaining / 60)} 分钟后可以再次总结`;
+    state.summaryTimer = window.setTimeout(renderAiSummary, Math.min(remaining * 1000, 60_000));
+  } else {
+    elements.generateSummaryButton.disabled = false;
+    elements.aiSummaryCooldown.textContent = "每 5 分钟可以重新总结一次";
+  }
+}
+
+async function generateAiSummary() {
+  setButtonLoading(elements.generateSummaryButton, true, "AI 正在整理…");
+  try {
+    const result = await api("/users/me/ai-summary", { method: "POST" });
+    state.user.ai_summary = result.summary;
+    state.user.ai_summary_generated_at = result.generated_at;
+    elements.aiSummaryCopy.textContent = result.summary;
+    showToast("新的综合形象已经写好");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setButtonLoading(elements.generateSummaryButton, false);
+    renderAiSummary();
+  }
 }
 
 function splitList(value) {
@@ -904,8 +1569,10 @@ async function saveProfile(event) {
     campus: String(form.get("campus") || "").trim() || null,
     department: String(form.get("department") || "").trim() || null,
     grade_year: form.get("grade_year") ? Number(form.get("grade_year")) : null,
+    gender: form.get("gender"),
     bio: String(form.get("bio") || "").trim() || null,
     interests: splitList(form.get("interests")),
+    hobby_skills: collectHobbySkills(),
     preferred_locations: splitList(form.get("preferred_locations")),
     social_style: form.get("social_style"),
     preferred_group_min: Number(form.get("preferred_group_min")),
@@ -951,7 +1618,26 @@ function bindEvents() {
     button.addEventListener("click", () => {
       if (button.dataset.refresh === "invitations") loadInvitations();
       if (button.dataset.refresh === "activities") loadActivities();
+      if (button.dataset.refresh === "square") loadSquare(false);
     });
+  });
+
+  elements.squareFilterForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    loadSquare(false);
+  });
+  elements.squareLoadMore.addEventListener("click", () => loadSquare(true));
+  elements.squareList.addEventListener("click", (event) => {
+    const participantButton = event.target.closest("[data-activity-participants]");
+    if (participantButton) {
+      openActivityParticipants(
+        participantButton.dataset.activityParticipants,
+        participantButton.dataset.activityTitle,
+      );
+      return;
+    }
+    const button = event.target.closest("[data-join-square]");
+    if (button) joinSquareActivity(button);
   });
 
   elements.matchForm.addEventListener("submit", handleMatch);
@@ -962,14 +1648,34 @@ function bindEvents() {
   document.querySelector("#create-solo-button").addEventListener("click", () => confirmMatch(true));
   elements.invitationList.addEventListener("click", respondInvitation);
   elements.activityList.addEventListener("click", (event) => {
+    const participantButton = event.target.closest("[data-activity-participants]");
+    if (participantButton) {
+      openActivityParticipants(
+        participantButton.dataset.activityParticipants,
+        participantButton.dataset.activityTitle,
+      );
+      return;
+    }
     const leaveButton = event.target.closest("[data-leave-activity]");
     if (leaveButton) openLeaveDialog(leaveButton.dataset.leaveActivity);
     const feedbackButton = event.target.closest("[data-feedback-activity]");
     if (feedbackButton) {
       openFeedbackDialog(feedbackButton.dataset.feedbackActivity, feedbackButton.dataset.feedbackUser);
     }
+    const calendarButton = event.target.closest("[data-calendar-activity]");
+    if (calendarButton) importActivityCalendar(calendarButton.dataset.calendarActivity);
+    const timeVoteButton = event.target.closest("[data-time-vote-activity]");
+    if (timeVoteButton) openTimeVoteDialog(timeVoteButton.dataset.timeVoteActivity);
+    const photoButton = event.target.closest("[data-photo-activity]");
+    if (photoButton) openPhotoDialog(photoButton.dataset.photoActivity);
   });
   elements.confirmLeaveButton.addEventListener("click", confirmLeaveActivity);
+  elements.timeVoteForm.addEventListener("submit", submitTimeVote);
+  elements.timeVoteList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-vote-id]");
+    if (button) respondTimeVote(button);
+  });
+  elements.photoForm.addEventListener("submit", uploadActivityPhoto);
   elements.feedbackForm.addEventListener("submit", submitFeedback);
   elements.peerReviewList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-peer-task]");
@@ -977,6 +1683,27 @@ function bindEvents() {
   });
   elements.peerReviewForm.addEventListener("submit", submitPeerReview);
   elements.profileForm.addEventListener("submit", saveProfile);
+  elements.generateSummaryButton.addEventListener("click", generateAiSummary);
+  elements.userProfileDialog.addEventListener("close", () => {
+    elements.userProfileContent.innerHTML = "";
+  });
+  elements.activityParticipantsList.addEventListener("click", (event) => {
+    const profileButton = event.target.closest("[data-user-profile]");
+    if (profileButton) openUserProfile(profileButton.dataset.userProfile);
+  });
+  elements.addHobbySkillButton.addEventListener("click", () => addHobbySkill());
+  elements.hobbySkillList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-remove-skill]");
+    if (!button) return;
+    button.closest("[data-skill-row]").remove();
+    if (!elements.hobbySkillList.children.length) renderHobbySkillEditor([]);
+  });
+  elements.feedbackForm.elements.evaluate_skill.addEventListener("change", (event) => {
+    toggleFeedbackSkillFields(event.target.checked);
+  });
+  document.addEventListener("input", (event) => {
+    if (event.target.matches("[data-level-slider]")) updateLevelOutput(event.target);
+  });
 
   document.querySelectorAll("[data-activity-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -989,12 +1716,17 @@ function bindEvents() {
   });
 
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
-    button.addEventListener("click", () => document.querySelector(`#${button.dataset.closeDialog}`).close());
+    button.addEventListener("click", () => {
+      document.querySelector(`#${button.dataset.closeDialog}`).close();
+      if (button.dataset.closeDialog === "activity-photo-dialog") revokePhotoUrls();
+    });
   });
   document.querySelectorAll(".tag-field input[type='checkbox']").forEach((input) => {
     input.addEventListener("change", () => {
-      const group = input.closest(".tag-field");
-      const checked = group.querySelectorAll("input:checked");
+      const group = input.name === "incident_tags"
+        ? elements.feedbackForm
+        : input.closest(".tag-field");
+      const checked = group.querySelectorAll(`input[name='${input.name}']:checked`);
       if (checked.length > 4) {
         input.checked = false;
         showToast("每组最多选 4 个，挑最有代表性的就好");

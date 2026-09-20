@@ -10,8 +10,8 @@
     <meta name="theme-color" content="#6d3ed2" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=3" />
-    <script src="/static/app.js?v=3" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=8" />
+    <script src="/static/app.js?v=9" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -33,6 +33,7 @@
 
       <nav id="main-nav" class="main-nav is-hidden" aria-label="主要功能">
         <button class="nav-button is-active" type="button" data-tab="match">找搭子</button>
+        <button class="nav-button" type="button" data-tab="square">活动广场</button>
         <button class="nav-button" type="button" data-tab="invitations">
           收到的邀请
           <span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span>
@@ -174,6 +175,15 @@
                   院系
                   <input name="department" type="text" maxlength="120" placeholder="例如：设计艺术与传媒学院" required />
                 </label>
+                <fieldset class="gender-choice">
+                  <legend>性别</legend>
+                  <div class="gender-choice-grid">
+                    <label><input type="radio" name="gender" value="male" required /><span class="gender-male"><b aria-hidden="true">♂</b> 男</span></label>
+                    <label><input type="radio" name="gender" value="female" /><span class="gender-female"><b aria-hidden="true">♀</b> 女</span></label>
+                    <label><input type="radio" name="gender" value="undisclosed" /><span class="gender-undisclosed"><b aria-hidden="true">—</b> 不公开</span></label>
+                  </div>
+                  <small>选择男或女时会公开显示；选择不公开时只计入“不公开”人数。性别不会用于 Agent 自动排序。</small>
+                </fieldset>
                 <fieldset class="onboarding-choices">
                   <legend>平时喜欢做什么（至少选一项）</legend>
                   <div class="choice-grid choice-grid-small">
@@ -185,6 +195,21 @@
                     <label class="choice-chip"><input type="checkbox" name="interests" value="吃饭" /><span>吃饭</span></label>
                   </div>
                 </fieldset>
+                <section class="onboarding-skill" aria-labelledby="register-skill-heading">
+                  <div>
+                    <strong id="register-skill-heading">最想展示的爱好或特长（选填）</strong>
+                    <small>注册后还能继续添加，例如羽毛球、摄影、建模</small>
+                  </div>
+                  <label>
+                    项目名称
+                    <input name="register_skill_name" type="text" maxlength="40" placeholder="例如：羽毛球" />
+                  </label>
+                  <label class="level-control">
+                    <span>目前水平 <output data-level-output>小白</output></span>
+                    <input name="register_skill_level" type="range" min="1" max="5" value="1" step="1" data-level-slider />
+                    <span class="level-scale" aria-hidden="true"><small>小白</small><small>入门</small><small>熟练</small><small>擅长</small><small>精通</small></span>
+                  </label>
+                </section>
                 <label>
                   常去地点
                   <input name="preferred_locations" type="text" placeholder="例如：南区体育馆，图书馆" required />
@@ -279,7 +304,7 @@
                     name="personal_requirement"
                     rows="4"
                     maxlength="500"
-                    placeholder="例如：希望找同院系、安静一点、守时且也喜欢羽毛球的搭子"
+                    placeholder="例如：我是羽毛球小白，希望有熟练的大佬带我；最好耐心、守时"
                   ></textarea>
                   <span class="field-help">Agent 会说明哪些要求已采用、哪些无法识别或不参与排序。</span>
                 </label>
@@ -360,6 +385,48 @@
           </div>
         </section>
 
+        <section id="panel-square" class="tab-panel is-hidden" data-panel="square" aria-labelledby="square-heading">
+          <div class="page-heading square-heading">
+            <div>
+              <p class="eyebrow">先逛逛，再决定</p>
+              <h1 id="square-heading">活动广场</h1>
+              <p class="heading-copy">看看大家正在等什么搭子。这里的“适合你”只按兴趣、地点和人数偏好排列，不会调用 AI。</p>
+            </div>
+            <button class="button button-quiet" type="button" data-refresh="square">刷新活动</button>
+          </div>
+          <form id="square-filter-form" class="square-filters" aria-label="筛选活动">
+            <label>
+              活动类型
+              <select name="category">
+                <option value="">全部类型</option>
+                <option value="羽毛球">羽毛球</option>
+                <option value="篮球">篮球</option>
+                <option value="跑步">跑步</option>
+                <option value="自习">自习</option>
+                <option value="吃饭">吃饭</option>
+                <option value="电影">电影</option>
+                <option value="摄影">摄影</option>
+              </select>
+            </label>
+            <label>
+              地点关键词
+              <input name="location" type="search" maxlength="160" placeholder="例如：南体、南区体育馆" />
+            </label>
+            <label>
+              排列方式
+              <select name="sort">
+                <option value="recommended">适合我的在前</option>
+                <option value="soonest">快开始的在前</option>
+              </select>
+            </label>
+            <button class="button button-primary" type="submit">筛选活动</button>
+          </form>
+          <div id="square-list" class="square-grid" aria-live="polite"></div>
+          <div class="load-more-row">
+            <button id="square-load-more" class="button button-quiet is-hidden" type="button">再看一批</button>
+          </div>
+        </section>
+
         <section id="panel-invitations" class="tab-panel is-hidden" data-panel="invitations" aria-labelledby="invitations-heading">
           <div class="page-heading">
             <div>
@@ -376,7 +443,7 @@
             <div>
               <p class="eyebrow">从约好到见面，再到认真说声谢谢</p>
               <h1 id="activities-heading">我的活动</h1>
-              <p class="heading-copy">接受邀请或创建活动后都会出现在这里。退出越晚，信用扣分越多。</p>
+              <p class="heading-copy">接受邀请或创建活动后都会出现在这里。开始前 1 小时内取消会扣信用分，更早取消不扣分。</p>
             </div>
             <button class="button button-quiet" type="button" data-refresh="activities">刷新</button>
           </div>
@@ -405,13 +472,23 @@
             <div>
               <p class="eyebrow">匹配依据</p>
               <h1 id="profile-heading">我的画像</h1>
-              <p class="heading-copy">你填写的是公开匹配画像；活动后 Agent 学到的隐藏画像只用于匹配与风控，不能被任何用户直接修改。</p>
+              <p class="heading-copy">完善兴趣、常去地点和相处方式，能让下一次匹配更懂你。</p>
             </div>
             <div class="credit-card" aria-label="当前信用分">
               <span>搭子信用</span>
               <strong id="profile-credit">100</strong>
             </div>
           </div>
+
+          <section class="ai-summary-card" aria-labelledby="ai-summary-heading">
+            <div>
+              <p class="eyebrow">换个角度认识自己</p>
+              <h2 id="ai-summary-heading">AI 看见的综合形象</h2>
+              <p id="ai-summary-copy">点击生成后，AI 会综合你的资料和已有活动反馈，写一段只给你看的总结。</p>
+              <small id="ai-summary-cooldown">每 5 分钟可以重新总结一次</small>
+            </div>
+            <button id="generate-summary-button" class="button button-accent" type="button">让 AI 总结我</button>
+          </section>
 
           <form id="profile-form" class="profile-form">
             <div class="profile-grid">
@@ -441,6 +518,15 @@
                 </select>
               </label>
               <label>
+                性别
+                <select name="gender">
+                  <option value="male">♂ 男</option>
+                  <option value="female">♀ 女</option>
+                  <option value="undisclosed">— 不公开</option>
+                </select>
+                <span class="field-help">男或女会公开显示；不公开只计入活动人数，不参与 Agent 自动排序</span>
+              </label>
+              <label>
                 兴趣
                 <input name="interests" type="text" placeholder="用逗号分隔，例如：羽毛球，摄影" />
               </label>
@@ -467,6 +553,17 @@
                 </label>
               </div>
             </div>
+            <section class="skill-editor-card" aria-labelledby="hobby-skill-heading">
+              <div class="skill-editor-heading">
+                <div>
+                  <h2 id="hobby-skill-heading">我的爱好与特长</h2>
+                  <p>每项都能选择从“小白”到“精通”的水平，匹配时会结合你的个性化需求使用。</p>
+                </div>
+                <button id="add-hobby-skill" class="button button-quiet" type="button">＋ 添加一项</button>
+              </div>
+              <div id="hobby-skill-list" class="hobby-skill-list"></div>
+              <div id="skill-marks" class="skill-marks is-hidden" aria-live="polite"></div>
+            </section>
             <label>
               自我介绍
               <textarea name="bio" rows="4" maxlength="500" placeholder="简单说说你的活动习惯"></textarea>
@@ -518,11 +615,35 @@
           到场情况
           <select name="attendance" required>
             <option value="attended">正常参加</option>
-            <option value="cancelled_early">提前说明并取消</option>
             <option value="late_cancel">临近活动才取消</option>
-            <option value="no_show">没有出现，也没说一声</option>
+            <option value="no_show">没有出现</option>
           </select>
         </label>
+
+        <section class="feedback-skill-card">
+          <label class="feedback-skill-toggle">
+            <input name="evaluate_skill" type="checkbox" />
+            <span><strong>评价 TA 在这项爱好中的水平</strong><small>选填，只在积累多次反馈后才可能形成系统标注</small></span>
+          </label>
+          <div id="feedback-skill-fields" class="feedback-skill-fields is-hidden">
+            <label>
+              爱好或特长
+              <input name="skill_name" type="text" maxlength="50" placeholder="例如：羽毛球" />
+            </label>
+            <label class="level-control">
+              <span>你观察到的水平 <output data-level-output>熟练</output></span>
+              <input name="skill_level" type="range" min="1" max="5" value="3" step="1" data-level-slider />
+              <span class="level-scale" aria-hidden="true"><small>小白</small><small>入门</small><small>熟练</small><small>擅长</small><small>精通</small></span>
+            </label>
+            <fieldset class="tag-field skill-feedback-flags">
+              <legend>如果确实观察到，再补充标记</legend>
+              <div class="tag-options">
+                <label><input type="checkbox" name="incident_tags" value="skill_level_mismatch" /><span>与自评差别较大</span></label>
+                <label><input type="checkbox" name="incident_tags" value="suspected_smurfing" /><span>疑似高手低报</span></label>
+              </div>
+            </fieldset>
+          </div>
+        </section>
 
         <fieldset class="tag-field">
           <legend>相处起来是什么感觉（最多选 4 个）</legend>
@@ -586,6 +707,62 @@
           <button class="button button-primary" type="submit">提交复核</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="time-vote-dialog" class="modal-card modal-card-wide">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="time-vote-dialog" aria-label="关闭">×</button>
+        <p class="eyebrow">时间需要大家点头</p>
+        <h2 id="time-vote-dialog-title">发起改期投票</h2>
+        <p class="modal-copy">每位搭子都能提出新时间；其他人全部同意后，活动时间才会修改。</p>
+        <form id="time-vote-form" class="form-stack">
+          <input name="activity_id" type="hidden" />
+          <div class="two-columns">
+            <label>新的开始时间<input name="starts_at" type="datetime-local" required /></label>
+            <label>新的结束时间<input name="ends_at" type="datetime-local" required /></label>
+          </div>
+          <p id="time-vote-error" class="form-error is-hidden" role="alert"></p>
+          <button class="button button-primary" type="submit">发起改期投票</button>
+        </form>
+        <div class="dialog-divider"></div>
+        <div class="section-heading-row"><h3>大家提出的时间</h3><span id="time-vote-count" class="count-pill">0 项</span></div>
+        <div id="time-vote-list" class="time-vote-list"></div>
+      </div>
+    </dialog>
+
+    <dialog id="activity-photo-dialog" class="modal-card modal-card-wide">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="activity-photo-dialog" aria-label="关闭">×</button>
+        <p class="eyebrow">快碰面了</p>
+        <h2 id="activity-photo-dialog-title">集合照片</h2>
+        <p class="modal-copy">开始前 15 分钟起可以上传周围环境，帮助搭子认出集合位置。每场只保留最新 5 张，活动结束后自动删除。</p>
+        <form id="activity-photo-form" class="photo-upload-row">
+          <input name="activity_id" type="hidden" />
+          <label class="file-picker">选择照片<input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required /></label>
+          <button class="button button-primary" type="submit">上传给搭子</button>
+        </form>
+        <p id="activity-photo-error" class="form-error is-hidden" role="alert"></p>
+        <div id="activity-photo-list" class="activity-photo-grid"></div>
+      </div>
+    </dialog>
+
+    <dialog id="activity-participants-dialog" class="modal-card modal-card-wide">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="activity-participants-dialog" aria-label="关闭">×</button>
+        <p class="eyebrow">这场活动都有谁</p>
+        <h2 id="activity-participants-title">参与者</h2>
+        <div id="activity-participants-summary" class="activity-gender-summary is-static"></div>
+        <div id="activity-participants-list" class="participant-profile-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog id="user-profile-dialog" class="modal-card modal-card-wide profile-dialog">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="user-profile-dialog" aria-label="关闭">×</button>
+        <div id="user-profile-content" aria-live="polite">
+          <div class="profile-dialog-loading">正在翻开这位搭子的主页…</div>
+        </div>
+      </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>

@@ -37,6 +37,8 @@ INCIDENT_LABELS = {
     "cancelled": "临时取消",
     "no_show": "未到场",
     "unsafe_behavior": "存在安全风险",
+    "skill_level_mismatch": "爱好水平与自述有差别",
+    "suspected_smurfing": "疑似高水平低报",
 }
 
 
@@ -53,18 +55,12 @@ class ModerationDecision:
 
 def calculate_leave_penalty(activity: Activity, now: datetime | None = None) -> tuple[int, str]:
     current = (now or datetime.now(UTC)).astimezone(UTC)
-    if current >= activity.ends_at:
-        return 0, "活动已经结束，不能再退出；请完成活动评价。"
+    if current >= activity.starts_at:
+        return 0, "活动已经开始，不能再取消；活动结束后可以如实评价到场情况。"
     remaining = activity.starts_at - current
-    if remaining > timedelta(hours=24):
-        return 0, "距离开始超过 24 小时，现在退出不会扣信用分。"
-    if remaining > timedelta(hours=6):
-        return 2, "距离开始不足 24 小时，退出将扣 2 分。"
     if remaining > timedelta(hours=1):
-        return 5, "距离开始不足 6 小时，退出将扣 5 分。"
-    if remaining.total_seconds() > 0:
-        return 10, "距离开始不足 1 小时，退出将扣 10 分。"
-    return 15, "活动已经开始，退出将扣 15 分。"
+        return 0, "距离开始还有 1 小时以上，现在取消不会扣信用分。"
+    return 10, "距离开始不足 1 小时，取消将扣 10 分。"
 
 
 def feedback_base_delta(feedback: Feedback) -> int:
@@ -369,10 +365,74 @@ async def refresh_hidden_profile(session: AsyncSession, user: User) -> None:
     incident_counts: Counter[str] = Counter()
     attendance_counts: Counter[str] = Counter()
     category_counts = Counter(activity.category for activity in activity_rows)
+    skill_feedback: dict[str, list[Feedback]] = {}
     for item in feedback_rows:
         personality_counts.update(item.personality_tags)
         incident_counts.update(item.incident_tags)
         attendance_counts.update([item.attendance])
+        if item.skill_name and item.skill_level is not None:
+            skill_key = "".join(item.skill_name.casefold().split())
+            skill_feedback.setdefault(skill_key, []).append(item)
+
+    claimed_skills = {
+        "".join(str(item.get("name", "")).casefold().split()): item
+        for item in (user.hobby_skills or [])
+        if isinstance(item, dict) and item.get("name")
+    }
+    skill_marks: list[dict] = []
+    skill_feedback_summary: list[dict] = []
+    for skill_key, rows in skill_feedback.items():
+        if len(rows) < 3:
+            continue
+        claimed = claimed_skills.get(skill_key)
+        name = str((claimed or {}).get("name") or rows[0].skill_name)
+        average_level = round(
+            sum(int(row.skill_level or 0) for row in rows) / len(rows), 2
+        )
+        mismatch_count = sum(
+            "skill_level_mismatch" in (row.incident_tags or []) for row in rows
+        )
+        smurfing_count = sum(
+            "suspected_smurfing" in (row.incident_tags or []) for row in rows
+        )
+        claimed_level = int(claimed.get("level", 0)) if claimed else None
+        skill_feedback_summary.append(
+            {
+                "name": name,
+                "feedback_count": len(rows),
+                "average_level": average_level,
+                "claimed_level": claimed_level,
+            }
+        )
+        possible_smurfing = smurfing_count >= 2 or (
+            claimed_level is not None
+            and claimed_level <= 2
+            and average_level >= 4
+            and sum(int(row.skill_level or 0) >= 4 for row in rows) >= 2
+        )
+        level_disputed = mismatch_count >= 2 or (
+            claimed_level is not None and abs(average_level - claimed_level) >= 1.5
+        )
+        if possible_smurfing:
+            skill_marks.append(
+                {
+                    "name": name,
+                    "flag_type": "possible_smurfing",
+                    "label": "多次反馈显示实际水平可能明显高于自评",
+                    "feedback_count": len(rows),
+                    "average_level": average_level,
+                }
+            )
+        elif level_disputed:
+            skill_marks.append(
+                {
+                    "name": name,
+                    "flag_type": "level_disputed",
+                    "label": "多人反馈与当前自评存在较大差异",
+                    "feedback_count": len(rows),
+                    "average_level": average_level,
+                }
+            )
 
     ratings = [item.rating for item in feedback_rows]
     average_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
@@ -418,6 +478,7 @@ async def refresh_hidden_profile(session: AsyncSession, user: User) -> None:
         "personality_signals": leading_traits,
         "attendance_signals": dict(attendance_counts),
         "incident_signals": dict(incident_counts),
+        "skill_feedback": skill_feedback_summary,
         "review_integrity": {
             "supported_feedback_count": review_integrity["peer_supported_feedback"],
             "unsupported_serious_feedback_count": review_integrity[
@@ -426,6 +487,7 @@ async def refresh_hidden_profile(session: AsyncSession, user: User) -> None:
         },
         "summary": "；".join(summary_parts) or "数据还不够，Agent 会在更多活动后继续学习。",
     }
+    user.skill_marks = skill_marks
     user.hidden_profile_updated_at = utcnow()
 
 
@@ -465,8 +527,8 @@ async def process_completed_activities(
             SystemEvent(
                 category="post_activity_agent",
                 status="success",
-                title="活动结束，画像 Agent 已完成复盘",
-                message=f"“{activity.title}”已结束，系统已更新参与者的隐藏画像并开放互评。",
+                title="活动结束，复盘已完成",
+                message=f"“{activity.title}”已结束，系统已整理本场记录并开放互评。",
                 details={"activity_id": activity.id, "member_count": len(member_ids)},
             )
         )

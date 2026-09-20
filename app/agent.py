@@ -101,12 +101,6 @@ TOOL_CATALOG = [
         "requires_confirmation": False,
     },
     {
-        "name": "analyze_hidden_profile",
-        "description": "活动结束后汇总用户活动习惯、社交信号与履约表现到隐藏画像",
-        "effect": "write",
-        "requires_confirmation": False,
-    },
-    {
         "name": "update_credit",
         "description": "根据可审计的履约事件更新搭子信用",
         "effect": "write",
@@ -184,6 +178,42 @@ COMMON_INTERESTS = {
 }
 
 
+class AgentOutputError(ValueError):
+    """Raised when the model returns no usable structured matching decision."""
+
+
+def parse_agent_decision(content: str) -> tuple[str, list[tuple[str, str]]]:
+    cleaned = content.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 3:
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    try:
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise AgentOutputError("Agent 没有返回可用的匹配结果") from exc
+
+    if not isinstance(parsed, dict):
+        raise AgentOutputError("Agent 没有返回可用的匹配结果")
+
+    summary = parsed.get("summary")
+    user_ids = parsed.get("recommended_user_ids")
+    activity_ids = parsed.get("recommended_activity_ids")
+    if (
+        not isinstance(summary, str)
+        or not summary.strip()
+        or not isinstance(user_ids, list)
+        or not isinstance(activity_ids, list)
+        or not all(isinstance(item, str) for item in [*user_ids, *activity_ids])
+    ):
+        raise AgentOutputError("Agent 没有返回可用的匹配结果")
+
+    preferred_order = [("activity", item) for item in activity_ids]
+    preferred_order.extend(("user", item) for item in user_ids)
+    return summary.strip()[:500], preferred_order
+
+
 @dataclass(slots=True)
 class AgentDecision:
     mode: str
@@ -252,6 +282,7 @@ class ToolRuntime:
                     "department": user.department,
                     "grade_year": user.grade_year,
                     "interests": user.interests,
+                    "hobby_skills": user.hobby_skills,
                     "preferred_locations": user.preferred_locations,
                     "social_style": user.social_style,
                     "preferred_group_range": [
@@ -356,6 +387,9 @@ class OpenAICompatibleMatchingAgent:
                             "department": runtime.context.requester.department,
                             "grade_year": runtime.context.requester.grade_year,
                             "interests": runtime.context.requester.interests,
+                            "hobby_skills": getattr(
+                                runtime.context.requester, "hobby_skills", []
+                            ),
                             "social_style": runtime.context.requester.social_style,
                         },
                         "request": {
@@ -420,20 +454,7 @@ class OpenAICompatibleMatchingAgent:
             if owns_client:
                 await client.aclose()
 
-        summary = "模型已通过工具查询并完成候选排序。"
-        preferred_order: list[tuple[str, str]] = []
-        try:
-            parsed = json.loads(final_content)
-            if isinstance(parsed.get("summary"), str):
-                summary = parsed["summary"][:500]
-            preferred_order.extend(
-                ("activity", item) for item in parsed.get("recommended_activity_ids", [])
-            )
-            preferred_order.extend(
-                ("user", item) for item in parsed.get("recommended_user_ids", [])
-            )
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            pass
+        summary, preferred_order = parse_agent_decision(final_content)
 
         by_key = {(item.candidate_type, item.candidate_id): item for item in candidates}
         ordered = [by_key[key] for key in preferred_order if key in by_key]
@@ -472,6 +493,8 @@ async def run_matching_agent(
         return await DeterministicMatchingAgent().run(runtime)
     try:
         return await OpenAICompatibleMatchingAgent(settings, client=client).run(runtime)
+    except AgentOutputError:
+        raise
     except (httpx.HTTPError, KeyError, RuntimeError, ValueError) as exc:
         if not settings.ai_fallback_enabled:
             raise

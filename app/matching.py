@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +38,7 @@ class Personalization:
     same_department: bool = False
     same_grade: bool = False
     preferred_style: str | None = None
+    wants_mentor: bool = False
     preferred_interests: list[str] = field(default_factory=list)
     applied: list[str] = field(default_factory=list)
     ignored_for_safety: list[str] = field(default_factory=list)
@@ -54,6 +56,67 @@ class ScoredCandidate:
 
 def normalize(value: str | None) -> str:
     return re.sub(r"\s+", "", (value or "").lower())
+
+
+def normalize_location(value: str | None) -> str:
+    """Normalize common campus address variants without requiring one exact format."""
+
+    normalized = normalize(value)
+    normalized = re.sub(r"[，,。.;；:：·\-_/（）()]+", "", normalized)
+    for prefix in ("南京理工大学", "南理工大学", "南理工"):
+        normalized = normalized.replace(prefix, "")
+    replacements = {
+        "南区体育馆": "南体",
+        "北区体育馆": "北体",
+        "江阴校区体育馆": "江阴体",
+        "大学生活动中心": "大活",
+        "学生活动中心": "大活",
+        "图书馆": "图书馆",
+        "体育馆": "体",
+        "教学楼": "教",
+        "校区": "",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    normalized = re.sub(r"(第?[一二三四五六七八九十0-9]+)(层|楼)", r"\1楼", normalized)
+    return normalized
+
+
+def location_similarity(left: str | None, right: str | None) -> float:
+    """Return a forgiving 0..1 similarity for differently formatted campus addresses."""
+
+    a = normalize_location(left)
+    b = normalize_location(right)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        return 0.9
+
+    sequence_score = SequenceMatcher(None, a, b).ratio()
+    a_pairs = {a[index : index + 2] for index in range(max(1, len(a) - 1))}
+    b_pairs = {b[index : index + 2] for index in range(max(1, len(b) - 1))}
+    pair_score = len(a_pairs & b_pairs) / max(1, len(a_pairs | b_pairs))
+    landmark_bonus = 0.0
+    for landmark in ("南体", "北体", "江阴体", "图书馆", "大活"):
+        if landmark in a and landmark in b:
+            landmark_bonus = 0.2
+            break
+    return round(min(1.0, max(sequence_score, pair_score) + landmark_bonus), 3)
+
+
+def location_match_score(requested: str | None, candidate: str | None) -> float:
+    similarity = location_similarity(requested, candidate)
+    if similarity >= 0.95:
+        return 100.0
+    if similarity >= 0.75:
+        return 90.0
+    if similarity >= 0.5:
+        return 78.0
+    if similarity >= 0.3:
+        return 65.0
+    return 50.0
 
 
 def interpret_personal_requirement(text: str | None, known_interests: set[str]) -> Personalization:
@@ -86,6 +149,13 @@ def interpret_personal_requirement(text: str | None, known_interests: set[str]) 
     elif any(term in normalized for term in ("外向", "健谈", "活泼", "话多")):
         result.preferred_style = "outgoing"
         result.applied.append("偏好外向型搭子")
+
+    if any(
+        term in normalized
+        for term in ("大佬带", "带带我", "求带", "带新手", "新手求带", "我是小白")
+    ):
+        result.wants_mentor = True
+        result.applied.append("优先匹配该项目熟练度较高的搭子")
 
     for interest in sorted(known_interests, key=len, reverse=True):
         if interest and normalize(interest) in normalized:
@@ -194,6 +264,16 @@ def score_user_candidate(
         for item in learned_profile.get("activity_signals", [])
         if isinstance(item, dict)
     }
+    candidate_skill = next(
+        (
+            item
+            for item in (candidate.hobby_skills or [])
+            if isinstance(item, dict)
+            and normalize(str(item.get("name", ""))) == normalize(context.category)
+        ),
+        None,
+    )
+    candidate_skill_level = int(candidate_skill.get("level", 0)) if candidate_skill else 0
 
     activity_score = 100.0 if normalize(context.category) in candidate_interests else 75.0
     if context.category in candidate.interests:
@@ -202,16 +282,12 @@ def score_user_candidate(
     if learned_activity_match:
         activity_score = min(100.0, activity_score + 10.0)
 
-    location = normalize(context.location)
-    preferred_locations = [normalize(item) for item in candidate.preferred_locations]
-    if any(location == item for item in preferred_locations):
-        location_score = 100.0
-    elif any(location in item or item in location for item in preferred_locations if item):
-        location_score = 85.0
-    elif candidate.campus and normalize(candidate.campus) in location:
-        location_score = 75.0
-    else:
-        location_score = 55.0
+    preferred_location_scores = [
+        location_match_score(context.location, item) for item in candidate.preferred_locations
+    ]
+    location_score = max(preferred_location_scores, default=50.0)
+    if candidate.campus and normalize(candidate.campus) in normalize(context.location):
+        location_score = max(location_score, 75.0)
 
     union = requester_interests | candidate_interests
     interest_score = (
@@ -272,6 +348,13 @@ def score_user_candidate(
             score += 3
         else:
             score -= 6
+    if personalization.wants_mentor:
+        if candidate_skill_level >= 4:
+            score += 8
+        elif candidate_skill_level == 3:
+            score += 3
+        elif candidate_skill_level:
+            score -= 4
 
     explanation = [
         "活动时间无冲突",
@@ -290,6 +373,13 @@ def score_user_candidate(
         explanation.append("社交方式符合个性化需求")
     if learned_activity_match:
         explanation.append("过往活动习惯与本次需求相符")
+    if location_score >= 78:
+        explanation.append("地点名称虽可能写法不同，但位置高度相近")
+    if personalization.wants_mentor and candidate_skill_level:
+        skill_label = {1: "小白", 2: "入门", 3: "熟练", 4: "擅长", 5: "精通"}.get(
+            candidate_skill_level, "已填写"
+        )
+        explanation.append(f"{context.category}自评为{skill_label}，已用于带新手偏好")
 
     return ScoredCandidate(
         candidate_type="user",
@@ -313,14 +403,7 @@ def score_activity_candidate(
     )
     request_seconds = max(1.0, (context.ends_at - context.starts_at).total_seconds())
     time_score = min(100.0, overlap_seconds / request_seconds * 100.0)
-    requested_location = normalize(context.location)
-    activity_location = normalize(activity.location)
-    if requested_location == activity_location:
-        location_score = 100.0
-    elif requested_location in activity_location or activity_location in requested_location:
-        location_score = 85.0
-    else:
-        location_score = 50.0
+    location_score = location_match_score(context.location, activity.location)
     available_slots = activity.capacity - member_count
     capacity_score = 100.0 if available_slots >= context.people_needed else 70.0
     score = time_score * 0.35 + 100.0 * 0.30 + location_score * 0.20 + capacity_score * 0.15
@@ -338,6 +421,7 @@ def score_activity_candidate(
         explanation=[
             "已有同类活动可直接加入",
             f"时间重合度 {int(time_score)} 分",
+            f"地点相近度 {int(location_score)} 分",
             f"当前还有 {available_slots} 个名额",
         ],
     )
