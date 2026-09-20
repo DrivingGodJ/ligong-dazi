@@ -2065,6 +2065,26 @@ a:focus-visible {
   gap: 0.9rem;
 }
 
+.feedback-honesty-note {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 1rem;
+  color: #6a4312;
+  background: #fff4d8;
+  border: 1px solid #efd497;
+  border-radius: 14px;
+}
+
+.feedback-honesty-note strong {
+  color: #51300a;
+  font-size: 0.92rem;
+}
+
+.feedback-honesty-note span {
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
 .feedback-skill-toggle {
   display: flex;
   gap: 0.7rem;
@@ -2076,10 +2096,6 @@ a:focus-visible {
   width: 20px;
   height: 20px;
   accent-color: var(--brand-700);
-}
-
-.skill-feedback-flags {
-  padding-top: 0.2rem;
 }
 
 .candidate-system-marks {

@@ -10,8 +10,8 @@
     <meta name="theme-color" content="#6d3ed2" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=8" />
-    <script src="/static/app.js?v=9" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=9" />
+    <script src="/static/app.js?v=10" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -597,6 +597,10 @@
         <p class="eyebrow">活动结束，互相留个脚印</p>
         <h2 id="feedback-dialog-title">评价你的搭子</h2>
         <p class="modal-copy">评价会先经过审核 Agent。高影响或互相矛盾的内容，可能请同场第三位参与者复核。</p>
+        <div class="feedback-honesty-note" role="note">
+          <strong>请务必如实填写</strong>
+          <span>评价会影响双方信用和系统判断。请只填写自己确认的情况，不确定的内容不要猜测。</span>
+        </div>
         <input name="activity_id" type="hidden" />
         <input name="reviewee_id" type="hidden" />
 
@@ -615,7 +619,6 @@
           到场情况
           <select name="attendance" required>
             <option value="attended">正常参加</option>
-            <option value="late_cancel">临近活动才取消</option>
             <option value="no_show">没有出现</option>
           </select>
         </label>
@@ -635,13 +638,7 @@
               <input name="skill_level" type="range" min="1" max="5" value="3" step="1" data-level-slider />
               <span class="level-scale" aria-hidden="true"><small>小白</small><small>入门</small><small>熟练</small><small>擅长</small><small>精通</small></span>
             </label>
-            <fieldset class="tag-field skill-feedback-flags">
-              <legend>如果确实观察到，再补充标记</legend>
-              <div class="tag-options">
-                <label><input type="checkbox" name="incident_tags" value="skill_level_mismatch" /><span>与自评差别较大</span></label>
-                <label><input type="checkbox" name="incident_tags" value="suspected_smurfing" /><span>疑似高手低报</span></label>
-              </div>
-            </fieldset>
+            <p class="field-help">你只需要选择实际观察到的水平；是否存在水平争议或高手低报，由系统结合多次评价自动判断。</p>
           </div>
         </section>
 
@@ -665,8 +662,6 @@
             <label><input type="checkbox" name="incident_tags" value="helpful" /><span>乐于帮忙</span></label>
             <label><input type="checkbox" name="incident_tags" value="clear_communication" /><span>沟通清楚</span></label>
             <label><input type="checkbox" name="incident_tags" value="late" /><span>有迟到</span></label>
-            <label><input type="checkbox" name="incident_tags" value="cancelled" /><span>临时取消</span></label>
-            <label><input type="checkbox" name="incident_tags" value="no_show" /><span>被放鸽子</span></label>
           </div>
         </fieldset>
 

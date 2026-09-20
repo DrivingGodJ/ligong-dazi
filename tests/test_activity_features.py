@@ -244,14 +244,41 @@ async def test_cooldowns_cancel_policy_and_ai_summary(client) -> None:
     assert leave.status_code == 200, leave.text
     assert leave.json()["credit_delta"] == -10
 
-    invalid_feedback = await client.post(
+    for invalid_attendance in ("cancelled_early", "late_cancel"):
+        invalid_feedback = await client.post(
+            "/api/v1/feedback",
+            headers=owner_headers,
+            json={
+                "activity_id": activity["id"],
+                "reviewee_id": "nobody",
+                "attendance": invalid_attendance,
+                "rating": 3,
+            },
+        )
+        assert invalid_feedback.status_code == 422
+
+    invalid_skill_mark = await client.post(
         "/api/v1/feedback",
         headers=owner_headers,
         json={
             "activity_id": activity["id"],
             "reviewee_id": "nobody",
-            "attendance": "cancelled_early",
+            "attendance": "attended",
             "rating": 3,
+            "incident_tags": ["suspected_smurfing"],
         },
     )
-    assert invalid_feedback.status_code == 422
+    assert invalid_skill_mark.status_code == 422
+
+    contradictory_attendance = await client.post(
+        "/api/v1/feedback",
+        headers=owner_headers,
+        json={
+            "activity_id": activity["id"],
+            "reviewee_id": "nobody",
+            "attendance": "no_show",
+            "rating": 3,
+            "incident_tags": ["late"],
+        },
+    )
+    assert contradictory_attendance.status_code == 422

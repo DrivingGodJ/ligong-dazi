@@ -452,18 +452,15 @@ IncidentTag = Literal[
     "helpful",
     "clear_communication",
     "late",
-    "cancelled",
     "no_show",
     "unsafe_behavior",
-    "skill_level_mismatch",
-    "suspected_smurfing",
 ]
 
 
 class FeedbackCreate(ApiModel):
     activity_id: str
     reviewee_id: str
-    attendance: Literal["attended", "late_cancel", "no_show"]
+    attendance: Literal["attended", "no_show"]
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=500)
     skill_name: str | None = Field(default=None, max_length=50)
@@ -480,9 +477,9 @@ class FeedbackCreate(ApiModel):
         if self.attendance == "no_show" and "no_show" not in self.incident_tags:
             self.incident_tags.append("no_show")
         if "no_show" in self.incident_tags and self.attendance != "no_show":
-            raise ValueError("选择“被放鸽子”时，到场情况也应选择“没有出现”")
-        if "punctual" in self.incident_tags and self.attendance == "no_show":
-            raise ValueError("“准时到场”和“没有出现”不能同时选择")
+            raise ValueError("记录“没有出现”时，到场情况也应选择“没有出现”")
+        if {"punctual", "late"} & set(self.incident_tags) and self.attendance == "no_show":
+            raise ValueError("“准时到场”或“有迟到”不能和“没有出现”同时选择")
         return self
 
 

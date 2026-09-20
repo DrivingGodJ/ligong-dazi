@@ -1211,8 +1211,19 @@ function openFeedbackDialog(activityId, userId) {
   elements.feedbackForm.elements.skill_level.value = "3";
   updateLevelOutput(elements.feedbackForm.elements.skill_level);
   toggleFeedbackSkillFields(false);
+  syncAttendanceFacts();
   elements.feedbackDialogTitle.textContent = `这次和 ${target.display_name} 搭得怎么样？`;
   elements.feedbackDialog.showModal();
+}
+
+function syncAttendanceFacts() {
+  const noShow = elements.feedbackForm.elements.attendance.value === "no_show";
+  elements.feedbackForm.querySelectorAll(
+    'input[name="incident_tags"][value="punctual"], input[name="incident_tags"][value="late"]',
+  ).forEach((input) => {
+    input.disabled = noShow;
+    if (noShow) input.checked = false;
+  });
 }
 
 async function submitFeedback(event) {
@@ -1318,8 +1329,9 @@ function renderUserProfilePage(page) {
   const styleLabels = { quiet: "偏安静", balanced: "都可以", outgoing: "偏外向" };
   const attendanceLabels = {
     attended: "正常参加",
-    late_cancel: "临近取消",
-    no_show: "未到场",
+    cancelled_early: "没有出现",
+    late_cancel: "没有出现",
+    no_show: "没有出现",
   };
   const incidentLabels = {
     punctual: "准时到场",
@@ -1327,7 +1339,7 @@ function renderUserProfilePage(page) {
     clear_communication: "沟通清楚",
     late: "有迟到",
     cancelled: "临时取消",
-    no_show: "未到场",
+    no_show: "没有出现",
     unsafe_behavior: "存在安全风险",
     skill_level_mismatch: "爱好水平存在争议",
     suspected_smurfing: "疑似高手低报",
@@ -1701,6 +1713,7 @@ function bindEvents() {
   elements.feedbackForm.elements.evaluate_skill.addEventListener("change", (event) => {
     toggleFeedbackSkillFields(event.target.checked);
   });
+  elements.feedbackForm.elements.attendance.addEventListener("change", syncAttendanceFacts);
   document.addEventListener("input", (event) => {
     if (event.target.matches("[data-level-slider]")) updateLevelOutput(event.target);
   });

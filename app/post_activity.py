@@ -389,12 +389,6 @@ async def refresh_hidden_profile(session: AsyncSession, user: User) -> None:
         average_level = round(
             sum(int(row.skill_level or 0) for row in rows) / len(rows), 2
         )
-        mismatch_count = sum(
-            "skill_level_mismatch" in (row.incident_tags or []) for row in rows
-        )
-        smurfing_count = sum(
-            "suspected_smurfing" in (row.incident_tags or []) for row in rows
-        )
         claimed_level = int(claimed.get("level", 0)) if claimed else None
         skill_feedback_summary.append(
             {
@@ -404,13 +398,13 @@ async def refresh_hidden_profile(session: AsyncSession, user: User) -> None:
                 "claimed_level": claimed_level,
             }
         )
-        possible_smurfing = smurfing_count >= 2 or (
+        possible_smurfing = (
             claimed_level is not None
             and claimed_level <= 2
             and average_level >= 4
             and sum(int(row.skill_level or 0) >= 4 for row in rows) >= 2
         )
-        level_disputed = mismatch_count >= 2 or (
+        level_disputed = (
             claimed_level is not None and abs(average_level - claimed_level) >= 1.5
         )
         if possible_smurfing:
