@@ -72,6 +72,7 @@ const elements = {
   addHobbySkillButton: document.querySelector("#add-hobby-skill"),
   skillMarks: document.querySelector("#skill-marks"),
   agentModePill: document.querySelector("#agent-mode-pill"),
+  agentModeLabel: document.querySelector("#agent-mode-label"),
   leaveDialog: document.querySelector("#leave-dialog"),
   leaveDialogTitle: document.querySelector("#leave-dialog-title"),
   leaveDialogCopy: document.querySelector("#leave-dialog-copy"),
@@ -185,6 +186,27 @@ function showToast(message) {
 function showInlineError(element, message) {
   element.textContent = message;
   element.classList.remove("is-hidden");
+}
+
+function setAgentModeLabel(mode, model) {
+  const modelName = String(model || "").trim();
+  elements.agentModeLabel.textContent =
+    (mode === "llm" || mode === "openai_compatible") && modelName
+      ? `${modelName} 为你服务`
+      : "规则匹配为你服务";
+  elements.agentModePill.title =
+    mode === "deterministic" ? "当前使用规则匹配，没有调用 AI 模型" : "当前匹配方式";
+}
+
+async function loadAgentMode() {
+  try {
+    const response = await fetch("/health/ready", { cache: "no-store" });
+    if (!response.ok) throw new Error("匹配服务未就绪");
+    const status = await response.json();
+    if (!state.preview) setAgentModeLabel(status.agent_mode, status.agent_model);
+  } catch {
+    if (!state.preview) elements.agentModeLabel.textContent = "匹配方式暂不可查";
+  }
 }
 
 function hideInlineError(element) {
@@ -344,6 +366,7 @@ function switchTab(tabName) {
   if (tabName === "activities") loadActivities();
   if (tabName === "square") loadSquare(false);
   if (tabName === "profile") populateProfileForm();
+  if (tabName === "match" && !state.preview) loadAgentMode();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -405,6 +428,7 @@ function getCategory(form) {
 
 function clearMatchRequestAfterAgentError() {
   state.preview = null;
+  loadAgentMode();
   state.selectedUsers.clear();
   state.selectedActivity = null;
   elements.matchForm.reset();
@@ -423,6 +447,8 @@ function clearMatchRequestAfterAgentError() {
 
 async function handleMatch(event) {
   event.preventDefault();
+  state.preview = null;
+  loadAgentMode();
   hideInlineError(elements.matchError);
   state.selectedUsers.clear();
   state.selectedActivity = null;
@@ -610,8 +636,7 @@ function renderCandidates() {
 
 function renderMatchResult() {
   elements.resultSummary.textContent = state.preview.summary;
-  elements.agentModePill.lastChild.textContent =
-    state.preview.agent_mode === "openai_compatible" ? " 模型 Agent" : " 规则 Agent";
+  setAgentModeLabel(state.preview.agent_mode, state.preview.agent_model);
   renderAgentTrace();
   renderPersonalization();
   renderCandidates();
@@ -711,6 +736,7 @@ async function confirmMatch(createSoloActivity = false) {
 
 function resetMatchResult() {
   state.preview = null;
+  loadAgentMode();
   state.selectedUsers.clear();
   state.selectedActivity = null;
   hideInlineError(elements.matchError);
@@ -1768,6 +1794,7 @@ async function initialize() {
   bindEvents();
   initializeDates();
   elements.confirmButton.disabled = true;
+  loadAgentMode();
   if (!state.token) {
     showAuthShell();
     return;

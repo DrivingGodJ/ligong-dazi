@@ -77,6 +77,7 @@ async def test_local_admin_page_config_and_plain_logs(
 
     ready = await client.get("/health/ready")
     assert ready.json()["agent_mode"] == "llm"
+    assert ready.json()["agent_model"] == "deepseek-flash"
 
     config_path = tmp_path / ".env"
     assert config_path.exists()

@@ -955,3 +955,55 @@
     margin-top: 0;
   }
 }
+
+@media (prefers-color-scheme: dark) {
+  .admin-nav,
+  .api-fields,
+  .summary-details p,
+  .technical-details dl {
+    background: #302a39;
+  }
+
+  .admin-nav a:hover,
+  .key-badge,
+  .provider-choice,
+  .log-filter:hover,
+  .log-filter.is-active {
+    background: var(--surface);
+  }
+
+  .provider-card input:checked + .provider-choice {
+    background: var(--brand-50);
+  }
+
+  .provider-monogram,
+  .provider-monogram.is-dark {
+    color: #fff;
+    background: #432669;
+  }
+
+  .provider-monogram.is-orange {
+    background: #aa3e0a;
+  }
+
+  .provider-monogram.is-soft {
+    color: var(--brand-800);
+    background: var(--brand-100);
+  }
+
+  .fallback-row {
+    border-color: #765d32;
+  }
+
+  .fallback-row small {
+    color: #e0c18c;
+  }
+
+  .fallback-row input:checked {
+    background: #6840b8;
+  }
+
+  .service-summary.is-loading .service-status-dot {
+    border-color: var(--line);
+  }
+}

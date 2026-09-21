@@ -42,7 +42,11 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
     assert frontend.status_code == 200
     assert "理工搭子局" in frontend.text
     assert live.json() == {"status": "ok"}
-    assert ready.json() == {"status": "ready", "agent_mode": "deterministic"}
+    assert ready.json() == {
+        "status": "ready",
+        "agent_mode": "deterministic",
+        "agent_model": None,
+    }
 
     token, headers = await register_user(client, "owner@njust.edu.cn", "发起人")
     assert token
@@ -132,6 +136,7 @@ async def test_agent_preview_confirmation_invitation_and_feedback(
     assert preview.status_code == 201, preview.text
     preview_body = preview.json()
     assert preview_body["agent_mode"] == "deterministic"
+    assert preview_body["agent_model"] is None
     assert preview_body["requires_confirmation"] is True
     assert any("同院系" in item for item in preview_body["personalization"]["applied"])
     assert any("信用分" in item for item in preview_body["personalization"]["applied"])

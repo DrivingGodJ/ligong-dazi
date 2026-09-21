@@ -286,6 +286,7 @@ class MatchPreviewResponse(ApiModel):
     match_request_id: str
     agent_run_id: str
     agent_mode: str
+    agent_model: str | None = None
     summary: str
     personalization: PersonalizationReport
     candidates: list[CandidatePublic]

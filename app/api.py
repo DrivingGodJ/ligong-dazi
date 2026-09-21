@@ -1350,6 +1350,7 @@ async def preview_match(
         match_request_id=match_request.id,
         agent_run_id=agent_run.id,
         agent_mode=decision.mode,
+        agent_model=decision.model,
         summary=decision.summary,
         personalization=PersonalizationReport(
             applied=decision.personalization.applied,

@@ -106,13 +106,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/health/ready")
-    async def health_ready(request: Request) -> dict[str, str]:
+    async def health_ready(request: Request) -> dict[str, str | None]:
         database: DatabaseRuntime = request.app.state.database
         async with database.session_factory() as session:
             await session.execute(text("SELECT 1"))
         return {
             "status": "ready",
             "agent_mode": "llm" if app_settings.use_llm else "deterministic",
+            "agent_model": app_settings.ai_model if app_settings.use_llm else None,
         }
 
     return app

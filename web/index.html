@@ -7,11 +7,12 @@
       name="description"
       content="理工搭子局：提交活动需求，让 AI Agent 查询候选、解释匹配并在确认后完成组局。"
     />
-    <meta name="theme-color" content="#6d3ed2" />
+    <meta name="theme-color" content="#f5f3f8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14111b" media="(prefers-color-scheme: dark)" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=9" />
-    <script src="/static/app.js?v=10" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=11" />
+    <script src="/static/app.js?v=11" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -241,7 +242,7 @@
             </div>
             <div id="agent-mode-pill" class="mode-pill">
               <span aria-hidden="true"></span>
-              规则 Agent
+              <span id="agent-mode-label">正在确认匹配方式…</span>
             </div>
           </div>
 
