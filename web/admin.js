@@ -31,6 +31,12 @@ const state = {
 };
 
 const elements = {
+  dashboard: document.querySelector("#admin-dashboard"),
+  loginPanel: document.querySelector("#admin-login"),
+  loginForm: document.querySelector("#admin-login-form"),
+  loginError: document.querySelector("#admin-login-error"),
+  loginButton: document.querySelector("#admin-login-button"),
+  logoutButton: document.querySelector("#admin-logout"),
   form: document.querySelector("#ai-config-form"),
   apiFields: document.querySelector("#api-fields"),
   apiKey: document.querySelector("#api-key"),
@@ -79,12 +85,50 @@ function formatApiError(payload, fallback) {
 async function adminApi(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${ADMIN_API}${path}`, { ...options, headers });
+  const response = await fetch(`${ADMIN_API}${path}`, { ...options, headers, credentials: "same-origin" });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
+    if (response.status === 401 && options.method !== "POST") showLocked();
     throw new Error(formatApiError(payload, `请求没有完成（${response.status}）`));
   }
   return payload;
+}
+
+function showLocked() {
+  elements.dashboard.classList.add("is-hidden");
+  elements.loginPanel.classList.remove("is-hidden");
+  elements.logoutButton.classList.add("is-hidden");
+  elements.loginForm.reset();
+}
+
+function showDashboard(requiresLogin) {
+  elements.loginPanel.classList.add("is-hidden");
+  elements.dashboard.classList.remove("is-hidden");
+  elements.logoutButton.classList.toggle("is-hidden", !requiresLogin);
+}
+
+async function loadDashboard() {
+  await Promise.all([loadConfig(), loadOverview(), loadLogs()]);
+}
+
+async function loginAdmin(event) {
+  event.preventDefault();
+  elements.loginError.classList.add("is-hidden");
+  setButtonLoading(elements.loginButton, true, "正在验证…");
+  try {
+    await adminApi("/session", {
+      method: "POST",
+      body: JSON.stringify({ password: elements.loginForm.querySelector("[name=password]").value }),
+    });
+    elements.loginForm.reset();
+    showDashboard(true);
+    await loadDashboard();
+  } catch (error) {
+    elements.loginError.textContent = error.message;
+    elements.loginError.classList.remove("is-hidden");
+  } finally {
+    setButtonLoading(elements.loginButton, false);
+  }
 }
 
 function setButtonLoading(button, loading, text) {
@@ -153,7 +197,7 @@ function updateProviderFields(vendor, useStoredValues = false) {
     : `填写 ${providerPresets[vendor].label} 的 API Key`;
   elements.keyHelp.textContent = savedForVendor
     ? "已经保存过密钥。留空不会删除或替换它；页面不会读取出原文。"
-    : "密钥只保存在运行服务的这台电脑上，页面和运行记录都不会显示原文。";
+    : "密钥保存在服务端，页面和运行记录都不会显示原文。";
 }
 
 function populateConfig(config) {
@@ -164,7 +208,7 @@ function populateConfig(config) {
   elements.apiKey.value = "";
   updateProviderFields(config.selected_provider, true);
 
-  elements.keyBadge.textContent = config.key_configured ? "密钥已保存在本机" : "还没有保存密钥";
+  elements.keyBadge.textContent = config.key_configured ? "密钥已安全保存" : "还没有保存密钥";
   elements.keyBadge.classList.toggle("is-ready", config.key_configured);
 }
 
@@ -327,6 +371,14 @@ async function loadLogs() {
 }
 
 function bindEvents() {
+  elements.loginForm.addEventListener("submit", loginAdmin);
+  elements.logoutButton.addEventListener("click", async () => {
+    try {
+      await adminApi("/session", { method: "DELETE" });
+    } finally {
+      showLocked();
+    }
+  });
   elements.form.addEventListener("submit", saveConfig);
   elements.testButton.addEventListener("click", testConnection);
   elements.refreshLogs.addEventListener("click", async () => {
@@ -359,17 +411,22 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  window.setInterval(() => {
+    if (!document.hidden && elements.loginPanel.classList.contains("is-hidden")) {
+      Promise.all([loadOverview(), loadLogs()]).catch(() => {});
+    }
+  }, 30000);
   try {
-    await Promise.all([loadConfig(), loadOverview(), loadLogs()]);
+    const session = await adminApi("/session");
+    showDashboard(session.requires_login);
+    await loadDashboard();
   } catch (error) {
+    if (!elements.loginPanel.classList.contains("is-hidden")) return;
     showError(`后台暂时无法读取设置：${error.message}`);
     elements.serviceStatus.textContent = "后台未连接";
-    elements.serviceProvider.textContent = "请确认本地服务正在运行";
+    elements.serviceProvider.textContent = "请稍后重试";
     elements.serviceSummary.classList.add("is-attention");
   }
-  window.setInterval(() => {
-    if (!document.hidden) Promise.all([loadOverview(), loadLogs()]);
-  }, 30000);
 }
 
 initialize();

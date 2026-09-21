@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.activity_media import cleanup_expired_activity_photos
+from app.admin import load_persisted_ai_config
 from app.admin import router as admin_router
 from app.api import router as api_router
 from app.core import DatabaseRuntime, Settings, get_settings
@@ -40,6 +42,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if app_settings.environment == "production":
+            if os.environ.get("RAILWAY_SERVICE_ID") and os.environ.get(
+                "RAILWAY_VOLUME_MOUNT_PATH"
+            ) != "/app/data":
+                raise RuntimeError("Railway 上必须先挂载 /app/data 持久化存储")
+            load_persisted_ai_config(app_settings)
         database = DatabaseRuntime(app_settings)
         app.state.database = database
         photo_directory = await asyncio.to_thread(
@@ -69,6 +77,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = app_settings
     app.state.admin_config_lock = asyncio.Lock()
+    app.state.admin_login_attempts = {}
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.cors_origins,
@@ -86,8 +95,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/admin", include_in_schema=False)
     async def admin_frontend() -> FileResponse:
-        if app_settings.environment == "production":
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="页面不存在")
         return FileResponse(web_directory / "admin.html")
 
     @app.get("/health/live")

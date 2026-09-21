@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/ligong_dazi.db"
     auto_create_schema: bool = True
     jwt_secret: SecretStr = SecretStr("dev-only-change-before-production")
+    admin_password: SecretStr | None = None
     access_token_minutes: int = Field(default=60 * 24 * 7, ge=5, le=60 * 24 * 30)
     cors_origins: list[str] = ["http://localhost:3000"]
 
@@ -57,11 +58,17 @@ class Settings(BaseSettings):
                 self.ai_vendor = "deepseek"
             elif "api.openai.com" in host:
                 self.ai_vendor = "openai"
-        if (
-            self.environment == "production"
-            and self.jwt_secret.get_secret_value() == "dev-only-change-before-production"
+        if self.environment == "production" and (
+            len(self.jwt_secret.get_secret_value()) < 32
+            or self.jwt_secret.get_secret_value()
+            in {"dev-only-change-before-production", "replace-with-a-long-random-secret"}
         ):
-            raise ValueError("production 环境必须配置 DAZI_JWT_SECRET")
+            raise ValueError("production 环境必须配置至少 32 位的 DAZI_JWT_SECRET")
+        if self.environment == "production" and (
+            self.admin_password is None
+            or len(self.admin_password.get_secret_value()) < 20
+        ):
+            raise ValueError("production 环境必须配置至少 20 位的 DAZI_ADMIN_PASSWORD")
         return self
 
     @property

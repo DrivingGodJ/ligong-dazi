@@ -4,6 +4,11 @@ import stat
 from pathlib import Path
 
 import httpx
+from asgi_lifespan import LifespanManager
+from pydantic import SecretStr
+
+from app.core import Settings
+from app.main import create_app
 
 
 async def test_local_admin_page_config_and_plain_logs(
@@ -85,3 +90,87 @@ async def test_local_admin_page_config_and_plain_logs(
     assert "备用规则可以正常使用" in titles
     assert "AI 服务设置已更新" in titles
     assert test_key not in logs.text
+
+
+async def test_production_admin_login_and_persisted_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "admin.env"
+    settings = Settings(
+        environment="production",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'production.db'}",
+        jwt_secret=SecretStr("test-jwt-secret-for-production-admin"),
+        admin_password=SecretStr("a-strong-admin-password-for-tests"),
+        ai_provider="deterministic",
+        config_file_path=str(config_path),
+        activity_photo_directory=str(tmp_path / "photos"),
+        cors_origins=[],
+    )
+    app = create_app(settings)
+    async with LifespanManager(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="https://dazi.example"
+        ) as client:
+            assert (await client.get("/admin")).status_code == 200
+            assert (await client.get("/api/v1/admin/config")).status_code == 401
+            assert (
+                await client.post(
+                    "/api/v1/admin/session",
+                    json={"password": "a-strong-admin-password-for-tests"},
+                )
+            ).status_code == 403
+            bad_login = await client.post(
+                "/api/v1/admin/session",
+                headers={"Origin": "https://dazi.example"},
+                json={"password": "incorrect"},
+            )
+            assert bad_login.status_code == 401
+            login = await client.post(
+                "/api/v1/admin/session",
+                headers={"Origin": "https://dazi.example"},
+                json={"password": "a-strong-admin-password-for-tests"},
+            )
+            assert login.status_code == 200
+            assert "HttpOnly" in login.headers["set-cookie"]
+            assert "Secure" in login.headers["set-cookie"]
+            assert (await client.get("/api/v1/admin/overview")).status_code == 200
+
+            payload = {
+                "vendor": "deepseek",
+                "api_key": "test-persisted-key-not-real",
+                "base_url": "",
+                "model": "deepseek-flash",
+                "fallback_enabled": True,
+            }
+            assert (
+                await client.put("/api/v1/admin/config", json=payload)
+            ).status_code == 403
+            saved = await client.put(
+                "/api/v1/admin/config",
+                headers={"Origin": "https://dazi.example"},
+                json=payload,
+            )
+            assert saved.status_code == 200
+            assert "test-persisted-key-not-real" not in saved.text
+            assert (
+                await client.delete(
+                    "/api/v1/admin/session",
+                    headers={"Origin": "https://dazi.example"},
+                )
+            ).status_code == 200
+            assert (await client.get("/api/v1/admin/config")).status_code == 401
+
+    restarted_settings = Settings(
+        environment="production",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'production.db'}",
+        jwt_secret=SecretStr("test-jwt-secret-for-production-admin"),
+        admin_password=SecretStr("a-strong-admin-password-for-tests"),
+        ai_provider="deterministic",
+        config_file_path=str(config_path),
+        activity_photo_directory=str(tmp_path / "photos"),
+        cors_origins=[],
+    )
+    restarted = create_app(restarted_settings)
+    async with LifespanManager(restarted):
+        assert restarted_settings.ai_vendor == "deepseek"
+        assert restarted_settings.ai_provider == "openai_compatible"
+        assert restarted_settings.ai_api_key.get_secret_value() == "test-persisted-key-not-real"

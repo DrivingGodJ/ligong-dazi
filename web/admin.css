@@ -2,6 +2,57 @@
   grid-template-columns: auto 1fr auto;
 }
 
+.admin-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.admin-login {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  gap: clamp(1.5rem, 5vw, 4rem);
+  align-items: center;
+  min-height: min(70vh, 600px);
+}
+
+.admin-login h1 {
+  max-width: 12em;
+  margin: 0;
+  color: var(--brand-950);
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.15;
+}
+
+.admin-login-copy > p:last-child {
+  max-width: 34em;
+  color: var(--ink-600);
+  line-height: 1.6;
+}
+
+.admin-login-card {
+  display: grid;
+  gap: 0.9rem;
+  padding: clamp(1.2rem, 3vw, 2rem);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  box-shadow: var(--shadow-small);
+}
+
+.admin-login-card label {
+  font-weight: 700;
+}
+
+.admin-login-card input {
+  width: 100%;
+  min-height: 48px;
+}
+
+.admin-login-card small {
+  color: var(--ink-600);
+}
+
 .admin-nav {
   display: flex;
   gap: 0.25rem;
@@ -823,6 +874,12 @@
 }
 
 @media (max-width: 660px) {
+  .admin-login {
+    grid-template-columns: 1fr;
+    min-height: auto;
+    padding-block: 2rem;
+  }
+
   .admin-back {
     padding-inline: 0.65rem;
   }

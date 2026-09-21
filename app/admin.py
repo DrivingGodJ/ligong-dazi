@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import os
 import tempfile
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import SecretStr
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +31,21 @@ from app.schemas import (
     AdminOverview,
 )
 
-router = APIRouter(prefix="/api/v1/admin", tags=["本地管理后台"])
+router = APIRouter(prefix="/api/v1/admin", tags=["管理后台"])
+ADMIN_COOKIE = "dazi_admin_session"
+ADMIN_SESSION_SECONDS = 2 * 60 * 60
+CONFIG_KEYS = {
+    "DAZI_AI_PROVIDER",
+    "DAZI_AI_VENDOR",
+    "DAZI_AI_API_KEY",
+    "DAZI_AI_BASE_URL",
+    "DAZI_AI_MODEL",
+    "DAZI_AI_FALLBACK_ENABLED",
+}
+
+
+class AdminLogin(BaseModel):
+    password: SecretStr
 
 
 PROVIDER_PRESETS = {
@@ -73,15 +91,128 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
-def require_local_admin(request: Request, settings: SettingsDep) -> None:
+def _check_same_origin(request: Request) -> None:
+    origin = request.headers.get("origin", "")
+    parsed = urlparse(origin)
+    if parsed.scheme != "https" or parsed.netloc != request.headers.get("host", ""):
+        raise HTTPException(status_code=403, detail="请从管理后台页面操作，不要从外部页面提交")
+
+
+def require_admin(request: Request, settings: SettingsDep) -> None:
     if settings.environment == "production":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="页面不存在")
+        if request.method not in {"GET", "HEAD"}:
+            _check_same_origin(request)
+        token = request.cookies.get(ADMIN_COOKIE, "")
+        try:
+            payload = jwt.decode(
+                token,
+                settings.jwt_secret.get_secret_value(),
+                algorithms=["HS256"],
+                options={"require": ["sub", "exp", "iat"]},
+            )
+        except jwt.PyJWTError as error:
+            raise HTTPException(status_code=401, detail="请先登录管理后台") from error
+        if payload.get("typ") != "admin" or payload.get("sub") != "admin":
+            raise HTTPException(status_code=401, detail="请先登录管理后台")
+        return
     client_host = request.client.host if request.client else ""
     if client_host not in {"127.0.0.1", "::1", "localhost", "test", "testserver"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="管理后台只允许从运行服务的这台电脑访问",
         )
+
+
+@router.get("/session", dependencies=[Depends(require_admin)])
+async def read_admin_session(settings: SettingsDep) -> dict[str, bool]:
+    return {"authenticated": True, "requires_login": settings.environment == "production"}
+
+
+@router.post("/session")
+async def create_admin_session(
+    payload: AdminLogin,
+    request: Request,
+    response: Response,
+    settings: SettingsDep,
+) -> dict[str, bool]:
+    if settings.environment != "production":
+        raise HTTPException(status_code=404, detail="本地管理后台无需登录")
+    _check_same_origin(request)
+    client_host = request.client.host if request.client else "unknown"
+    attempts: dict[str, list[float]] = request.app.state.admin_login_attempts
+    now = time.monotonic()
+    recent = [stamp for stamp in attempts.get(client_host, []) if now - stamp < 600]
+    if len(recent) >= 10:
+        raise HTTPException(status_code=429, detail="尝试次数较多，请 10 分钟后再试")
+    submitted = hashlib.sha256(payload.password.get_secret_value().encode()).digest()
+    expected = hashlib.sha256(settings.admin_password.get_secret_value().encode()).digest()
+    if not hmac.compare_digest(submitted, expected):
+        recent.append(now)
+        attempts[client_host] = recent
+        raise HTTPException(status_code=401, detail="管理员口令不正确")
+    attempts.pop(client_host, None)
+    issued = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": "admin",
+            "typ": "admin",
+            "iat": issued,
+            "exp": issued + timedelta(seconds=ADMIN_SESSION_SECONDS),
+        },
+        settings.jwt_secret.get_secret_value(),
+        algorithm="HS256",
+    )
+    response.set_cookie(
+        ADMIN_COOKIE,
+        token,
+        max_age=ADMIN_SESSION_SECONDS,
+        path="/api/v1/admin",
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return {"authenticated": True}
+
+
+@router.delete("/session", dependencies=[Depends(require_admin)])
+async def delete_admin_session(response: Response) -> dict[str, bool]:
+    response.delete_cookie(ADMIN_COOKIE, path="/api/v1/admin")
+    return {"authenticated": False}
+
+
+def load_persisted_ai_config(settings: Settings) -> None:
+    path = Path(settings.config_file_path).expanduser().resolve()
+    if not path.exists():
+        return
+    saved = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() in CONFIG_KEYS:
+            saved[key.strip()] = value
+    provider = saved.get("DAZI_AI_PROVIDER")
+    vendor = saved.get("DAZI_AI_VENDOR")
+    if provider is not None:
+        if provider not in {"auto", "deterministic", "openai_compatible"}:
+            raise ValueError("已保存的 AI 服务模式无效")
+        settings.ai_provider = provider
+    if vendor is not None:
+        if vendor not in PROVIDER_PRESETS or vendor == "rules":
+            raise ValueError("已保存的 AI 服务商无效")
+        settings.ai_vendor = vendor
+    if "DAZI_AI_API_KEY" in saved:
+        key = saved["DAZI_AI_API_KEY"]
+        settings.ai_api_key = SecretStr(key) if key else None
+    if "DAZI_AI_BASE_URL" in saved:
+        settings.ai_base_url = saved["DAZI_AI_BASE_URL"]
+    if "DAZI_AI_MODEL" in saved:
+        settings.ai_model = saved["DAZI_AI_MODEL"]
+    if "DAZI_AI_FALLBACK_ENABLED" in saved:
+        value = saved["DAZI_AI_FALLBACK_ENABLED"].lower()
+        if value not in {"true", "false"}:
+            raise ValueError("已保存的 AI 备用规则设置无效")
+        settings.ai_fallback_enabled = value == "true"
 
 
 def _selected_provider(settings: Settings) -> str:
@@ -107,7 +238,7 @@ def present_config(settings: Settings) -> AdminAIConfigPublic:
         status_message = "当前不调用外部 AI，系统会使用本地可解释规则完成匹配。"
         mode_label = "不使用 API"
     elif has_key:
-        status_message = "密钥已安全保存在本机，新的匹配请求会使用该 AI 服务。"
+        status_message = "密钥已安全保存，新的匹配请求会使用该 AI 服务。"
         mode_label = "AI Agent 已启用"
     else:
         status_message = "还没有可用密钥，请填写后保存。"
@@ -260,7 +391,7 @@ async def _record_event(
 @router.get(
     "/config",
     response_model=AdminAIConfigPublic,
-    dependencies=[Depends(require_local_admin)],
+    dependencies=[Depends(require_admin)],
 )
 async def read_ai_config(settings: SettingsDep) -> AdminAIConfigPublic:
     return present_config(settings)
@@ -269,7 +400,7 @@ async def read_ai_config(settings: SettingsDep) -> AdminAIConfigPublic:
 @router.put(
     "/config",
     response_model=AdminAIConfigPublic,
-    dependencies=[Depends(require_local_admin)],
+    dependencies=[Depends(require_admin)],
 )
 async def update_ai_config(
     payload: AdminAIConfigUpdate,
@@ -316,7 +447,7 @@ async def update_ai_config(
 @router.post(
     "/config/test",
     response_model=AdminAIConnectionTestResponse,
-    dependencies=[Depends(require_local_admin)],
+    dependencies=[Depends(require_admin)],
 )
 async def test_ai_connection(
     payload: AdminAIConfigUpdate,
@@ -405,7 +536,7 @@ async def test_ai_connection(
 @router.get(
     "/overview",
     response_model=AdminOverview,
-    dependencies=[Depends(require_local_admin)],
+    dependencies=[Depends(require_admin)],
 )
 async def read_overview(
     session: SessionDep,
@@ -583,7 +714,7 @@ def _system_log_item(event: SystemEvent) -> AdminLogItem:
 @router.get(
     "/logs",
     response_model=list[AdminLogItem],
-    dependencies=[Depends(require_local_admin)],
+    dependencies=[Depends(require_admin)],
 )
 async def read_plain_logs(
     session: SessionDep,

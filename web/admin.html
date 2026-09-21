@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="理工搭子局本地管理后台：设置 AI 服务并查看易懂的 Agent 运行记录。" />
+    <meta name="description" content="理工搭子局管理后台：设置 AI 服务并查看易懂的 Agent 运行记录。" />
     <meta name="theme-color" content="#6436c8" />
     <title>管理后台 · 理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="stylesheet" href="/static/styles.css?v=3" />
-    <link rel="stylesheet" href="/static/admin.css?v=2" />
-    <script src="/static/admin.js?v=2" defer></script>
+    <link rel="stylesheet" href="/static/admin.css?v=3" />
+    <script src="/static/admin.js?v=3" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#admin-content">跳到后台内容</a>
@@ -25,7 +25,7 @@
         </span>
         <span>
           <strong>理工搭子局</strong>
-          <small>本地管理后台</small>
+          <small>管理后台</small>
         </span>
       </a>
 
@@ -35,10 +35,28 @@
         <a href="#plain-logs">运行记录</a>
       </nav>
 
-      <a class="button button-quiet button-small admin-back" href="/">返回用户端</a>
+      <div class="admin-header-actions">
+        <button id="admin-logout" class="button button-quiet button-small is-hidden" type="button">退出管理</button>
+        <a class="button button-quiet button-small admin-back" href="/">返回用户端</a>
+      </div>
     </header>
 
     <main id="admin-content" class="admin-main">
+      <section id="admin-login" class="admin-login is-hidden" aria-labelledby="admin-login-title">
+        <div class="admin-login-copy">
+          <p class="eyebrow">管理员专用</p>
+          <h1 id="admin-login-title">先验证身份，再管理搭子局</h1>
+          <p>登录后可以切换 AI 服务、保存 Key，并查看系统运行记录。普通用户不需要进入这里。</p>
+        </div>
+        <form id="admin-login-form" class="admin-login-card">
+          <label for="admin-password">管理员口令</label>
+          <input id="admin-password" name="password" type="password" autocomplete="current-password" required />
+          <p id="admin-login-error" class="form-error is-hidden" role="alert"></p>
+          <button id="admin-login-button" class="button button-primary" type="submit">登录管理后台</button>
+          <small>口令只用于本次登录，不会保存在浏览器页面中。</small>
+        </form>
+      </section>
+      <div id="admin-dashboard" class="is-hidden">
       <section id="overview" class="admin-hero" aria-labelledby="admin-title">
         <div>
           <p class="eyebrow">AI 搭子服务控制台</p>
@@ -149,7 +167,7 @@
                   />
                   <button id="toggle-key-visibility" class="secret-toggle" type="button">显示</button>
                 </span>
-                <span id="key-help" class="field-help">密钥只保存在运行服务的这台电脑上，页面不会读取出原文。</span>
+                <span id="key-help" class="field-help">密钥保存在服务端，页面不会读取出原文。</span>
               </label>
 
               <label for="model-name">
@@ -233,6 +251,7 @@
           <div class="admin-loading">正在整理运行记录…</div>
         </div>
       </section>
+      </div>
     </main>
 
     <div id="admin-toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
