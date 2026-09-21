@@ -17,7 +17,7 @@ from app.admin import load_persisted_ai_config
 from app.admin import router as admin_router
 from app.api import router as api_router
 from app.core import DatabaseRuntime, Settings, get_settings
-from app.migrations import ensure_sqlite_compatibility
+from app.migrations import ensure_sqlite_compatibility, migrate_user_campuses
 from app.models import Base
 from app.post_activity import process_completed_activities
 
@@ -63,6 +63,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await connection.run_sync(Base.metadata.create_all)
             await ensure_sqlite_compatibility(database.engine)
         async with database.session_factory() as session:
+            migrated_campuses = await migrate_user_campuses(session)
+            if migrated_campuses:
+                logger.info("已将 %s 位用户的旧校区资料归一为南京或江阴", migrated_campuses)
             await process_completed_activities(session)
             await cleanup_expired_activity_photos(session)
             await session.commit()

@@ -119,6 +119,7 @@ class Activity(Base, TimestampMixin):
     capacity: Mapped[int] = mapped_column(Integer)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     personal_requirement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    same_gender_only: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(30), default="open", index=True)
     post_activity_processed_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime(), nullable=True
@@ -196,6 +197,7 @@ class MatchRequest(Base, TimestampMixin):
     people_needed: Mapped[int] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     personal_requirement: Mapped[str | None] = mapped_column(Text, nullable=True)
+    same_gender_only: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(30), default="previewed", index=True)
     activity_id: Mapped[str | None] = mapped_column(ForeignKey("activities.id"), nullable=True)
 

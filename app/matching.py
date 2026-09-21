@@ -30,6 +30,7 @@ class MatchContext:
     location: str
     people_needed: int
     personal_requirement: str | None
+    same_gender_only: bool = False
 
 
 @dataclass(slots=True)
@@ -174,6 +175,10 @@ async def search_open_activities(
     context: MatchContext,
     limit: int = 10,
 ) -> list[tuple[Activity, int]]:
+    # A request to create a same-gender-only activity must not join an existing
+    # activity whose membership rules the requester cannot control.
+    if context.same_gender_only:
+        return []
     member_count = (
         select(
             ActivityMember.activity_id.label("activity_id"),
@@ -193,6 +198,12 @@ async def search_open_activities(
             Activity.starts_at < context.ends_at,
             Activity.ends_at > context.starts_at,
             (Activity.capacity - func.coalesce(member_count.c.member_count, 0)) >= 1,
+            or_(
+                Activity.same_gender_only.is_(False),
+                Activity.owner_id.in_(
+                    select(User.id).where(User.gender == context.requester.gender)
+                ),
+            ),
         )
         .order_by(Activity.starts_at.asc())
         .limit(max(1, min(limit, 50)))
@@ -241,6 +252,8 @@ async def search_available_users(
         conditions.append(User.id.not_in(blocked_ids))
     if conflict_ids:
         conditions.append(User.id.not_in(conflict_ids))
+    if context.same_gender_only:
+        conditions.append(User.gender == context.requester.gender)
 
     statement = (
         select(User)

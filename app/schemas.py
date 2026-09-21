@@ -13,12 +13,15 @@ from pydantic import (
     model_validator,
 )
 
+from app.campus import require_campus
+
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
 Gender = Literal["male", "female", "undisclosed"]
+Campus = Literal["南京", "江阴"]
 
 
 class HobbySkill(ApiModel):
@@ -57,7 +60,7 @@ class RegisterRequest(ApiModel):
     password: str = Field(min_length=8, max_length=128)
     display_name: str = Field(min_length=1, max_length=80)
     university: str = Field(default="南京理工大学", min_length=2, max_length=120)
-    campus: str | None = Field(default=None, max_length=80)
+    campus: Campus
     department: str | None = Field(default=None, max_length=120)
     grade_year: int | None = Field(default=None, ge=1, le=8)
     gender: Gender = "undisclosed"
@@ -73,6 +76,11 @@ class RegisterRequest(ApiModel):
     @classmethod
     def clean_registration_lists(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @field_validator("campus", mode="before")
+    @classmethod
+    def clean_campus(cls, value: str | None) -> str | None:
+        return require_campus(value)
 
     @field_validator("hobby_skills")
     @classmethod
@@ -101,7 +109,7 @@ class TokenResponse(ApiModel):
 
 class UserProfileUpdate(ApiModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
-    campus: str | None = Field(default=None, max_length=80)
+    campus: Campus | None = None
     department: str | None = Field(default=None, max_length=120)
     grade_year: int | None = Field(default=None, ge=1, le=8)
     gender: Gender | None = None
@@ -112,6 +120,11 @@ class UserProfileUpdate(ApiModel):
     social_style: Literal["quiet", "balanced", "outgoing"] | None = None
     preferred_group_min: int | None = Field(default=None, ge=2, le=30)
     preferred_group_max: int | None = Field(default=None, ge=2, le=30)
+
+    @field_validator("campus", mode="before")
+    @classmethod
+    def clean_campus(cls, value: str | None) -> str | None:
+        return require_campus(value)
 
     @field_validator("interests", "preferred_locations")
     @classmethod
@@ -207,6 +220,7 @@ class ActivityCreate(ApiModel):
     capacity: int = Field(ge=2, le=50)
     description: str | None = Field(default=None, max_length=1000)
     personal_requirement: str | None = Field(default=None, max_length=500)
+    same_gender_only: bool = False
 
     @field_validator("starts_at", "ends_at")
     @classmethod
@@ -237,6 +251,7 @@ class ActivityPublic(ApiModel):
     gender_counts: dict[Gender, int]
     description: str | None
     personal_requirement: str | None
+    same_gender_only: bool
     status: str
 
 
@@ -248,6 +263,7 @@ class MatchPreviewRequest(ApiModel):
     people_needed: int = Field(ge=1, le=20)
     title: str | None = Field(default=None, max_length=120)
     personal_requirement: str | None = Field(default=None, max_length=500)
+    same_gender_only: bool = False
 
     @field_validator("starts_at", "ends_at")
     @classmethod
@@ -370,12 +386,14 @@ class ActivitySquareItem(ApiModel):
     activity: ActivityPublic
     joined: bool
     joinable: bool
+    join_reason: str | None = None
     recommendation_score: float
     recommendation_reasons: list[str] = Field(default_factory=list)
 
 
 class ActivitySquarePage(ApiModel):
     items: list[ActivitySquareItem]
+    categories: list[str] = Field(default_factory=list)
     offset: int
     next_offset: int | None
     has_more: bool

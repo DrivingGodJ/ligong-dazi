@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -192,8 +193,20 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
         gender_counts=gender_counts,
         description=activity.description,
         personal_requirement=activity.personal_requirement,
+        same_gender_only=activity.same_gender_only,
         status=activity.status,
     )
+
+
+async def activity_join_block_reason(
+    session: AsyncSession, activity: Activity, user: User
+) -> str | None:
+    if not activity.same_gender_only or user.id == activity.owner_id:
+        return None
+    owner_gender = await session.scalar(select(User.gender).where(User.id == activity.owner_id))
+    if user.gender not in {"male", "female"} or user.gender != owner_gender:
+        return "这场活动仅限与发起人同性的搭子加入"
+    return None
 
 
 def system_profile_public(user: User) -> UserSystemProfile:
@@ -479,6 +492,11 @@ async def create_activity(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> ActivityPublic:
+    if payload.same_gender_only and current_user.gender not in {"male", "female"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请先在我的画像中选择男或女，才能创建仅限同性的活动",
+        )
     activity = Activity(owner_id=current_user.id, **payload.model_dump())
     session.add(activity)
     await session.flush()
@@ -513,8 +531,9 @@ async def activity_square(
     current_user: CurrentUser,
     session: SessionDep,
     category: str | None = Query(default=None, max_length=50),
+    search: str | None = Query(default=None, max_length=160),
+    activity_date: Annotated[date | None, Query(alias="date")] = None,
     location: str | None = Query(default=None, max_length=160),
-    sort: str = Query(default="recommended", pattern="^(recommended|soonest)$"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=12, ge=1, le=30),
 ) -> ActivitySquarePage:
@@ -527,15 +546,23 @@ async def activity_square(
                     Activity.starts_at > utcnow(),
                 )
                 .order_by(Activity.starts_at.asc())
-                .limit(500)
             )
         ).all()
     )
+    categories = sorted({activity.category for activity in activities})
+    search_term = (search or location or "").strip().casefold()
     items: list[ActivitySquareItem] = []
     for activity in activities:
         if category and activity.category != category:
             continue
-        if location and location_similarity(location, activity.location) < 0.3:
+        local_activity_date = activity.starts_at.astimezone(ZoneInfo("Asia/Shanghai")).date()
+        if activity_date and local_activity_date != activity_date:
+            continue
+        if search_term and not (
+            search_term in activity.title.casefold()
+            or search_term in activity.location.casefold()
+            or location_similarity(search_term, activity.location) >= 0.3
+        ):
             continue
         public_activity = await activity_public(session, activity)
         membership = await session.scalar(
@@ -545,27 +572,35 @@ async def activity_square(
             )
         )
         score, reasons = activity_recommendation(current_user, activity)
+        join_block_reason = await activity_join_block_reason(session, activity, current_user)
+        is_full = public_activity.participant_count >= activity.capacity
         items.append(
             ActivitySquareItem(
                 activity=public_activity,
                 joined=membership == "confirmed",
                 joinable=(
                     activity.status == "open"
-                    and public_activity.participant_count < activity.capacity
+                    and not is_full
+                    and join_block_reason is None
                 ),
+                join_reason=join_block_reason or ("已经满员" if is_full else None),
                 recommendation_score=score,
                 recommendation_reasons=reasons,
             )
         )
-    if sort == "recommended":
-        items.sort(key=lambda item: (-item.recommendation_score, item.activity.starts_at))
-    else:
-        items.sort(key=lambda item: item.activity.starts_at)
+    items.sort(
+        key=lambda item: (
+            not item.joinable and not item.joined,
+            -item.recommendation_score,
+            item.activity.starts_at,
+        )
+    )
     page_items = items[offset : offset + limit]
     next_offset = offset + len(page_items)
     has_more = next_offset < len(items)
     return ActivitySquarePage(
         items=page_items,
+        categories=categories,
         offset=offset,
         next_offset=next_offset if has_more else None,
         has_more=has_more,
@@ -627,6 +662,9 @@ async def join_activity_from_square(
             activity=await activity_public(session, activity),
             message="你已经在这场活动里啦。",
         )
+    join_block_reason = await activity_join_block_reason(session, activity, current_user)
+    if join_block_reason:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=join_block_reason)
     member_count = int(
         await session.scalar(
             select(func.count(ActivityMember.id)).where(
@@ -1247,6 +1285,11 @@ async def preview_match(
     session: SessionDep,
     settings: SettingsDep,
 ) -> MatchPreviewResponse:
+    if payload.same_gender_only and current_user.gender not in {"male", "female"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请先在我的画像中选择男或女，才能创建仅限同性的活动",
+        )
     latest_request_at = await session.scalar(
         select(func.max(MatchRequest.created_at)).where(
             MatchRequest.requester_id == current_user.id,
@@ -1281,6 +1324,7 @@ async def preview_match(
         location=match_request.location,
         people_needed=match_request.people_needed,
         personal_requirement=match_request.personal_requirement,
+        same_gender_only=match_request.same_gender_only,
     )
     try:
         decision = await run_matching_agent(session, context, settings)
@@ -1424,6 +1468,9 @@ async def confirm_match(
         )
         if activity is None or activity.status != "open":
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动已不可加入")
+        join_block_reason = await activity_join_block_reason(session, activity, current_user)
+        if join_block_reason:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=join_block_reason)
         member_count = int(
             await session.scalar(
                 select(func.count(ActivityMember.id)).where(
@@ -1449,6 +1496,20 @@ async def confirm_match(
         write_tools = ["join_activity", "schedule_reminder"]
     else:
         selected_ids = set(payload.candidate_user_ids)
+        if match_request.same_gender_only:
+            if current_user.gender not in {"male", "female"}:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="请先选择男或女，才能创建仅限同性的活动",
+                )
+            selected_genders = (
+                await session.execute(select(User.id, User.gender).where(User.id.in_(selected_ids)))
+            ).all()
+            if any(gender != current_user.gender for _, gender in selected_genders):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="仅限同性活动不能邀请其他性别的搭子",
+                )
         if not selected_ids.issubset(allowed_users):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能邀请本次推荐的用户"
@@ -1467,6 +1528,7 @@ async def confirm_match(
             location=match_request.location,
             capacity=match_request.people_needed + 1,
             personal_requirement=match_request.personal_requirement,
+            same_gender_only=match_request.same_gender_only,
             status="open",
         )
         session.add(activity)
@@ -1564,6 +1626,9 @@ async def respond_to_invitation(
     if activity is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动不存在")
     if payload.decision == "accepted":
+        join_block_reason = await activity_join_block_reason(session, activity, current_user)
+        if join_block_reason:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=join_block_reason)
         member_count = int(
             await session.scalar(
                 select(func.count(ActivityMember.id)).where(

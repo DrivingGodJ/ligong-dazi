@@ -21,6 +21,10 @@ const state = {
   summaryTimer: null,
   toastTimer: null,
   skillRowCounter: 0,
+  profileSaveTimer: null,
+  profileSaveInFlight: false,
+  profileSavedSnapshot: "",
+  profileEditRevision: 0,
 };
 
 const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
@@ -65,6 +69,8 @@ const elements = {
   profileForm: document.querySelector("#profile-form"),
   profileCredit: document.querySelector("#profile-credit"),
   profileStatus: document.querySelector("#profile-status"),
+  profileRetry: document.querySelector("#profile-retry"),
+  campusMigrationNote: document.querySelector("#campus-migration-note"),
   aiSummaryCopy: document.querySelector("#ai-summary-copy"),
   aiSummaryCooldown: document.querySelector("#ai-summary-cooldown"),
   generateSummaryButton: document.querySelector("#generate-summary-button"),
@@ -269,6 +275,8 @@ function showAuthShell() {
 }
 
 function logout(showMessage = true) {
+  window.clearTimeout(state.profileSaveTimer);
+  state.profileEditRevision += 1;
   state.token = null;
   state.user = null;
   state.preview = null;
@@ -365,7 +373,6 @@ function switchTab(tabName) {
   if (tabName === "invitations") loadInvitations();
   if (tabName === "activities") loadActivities();
   if (tabName === "square") loadSquare(false);
-  if (tabName === "profile") populateProfileForm();
   if (tabName === "match" && !state.preview) loadAgentMode();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
@@ -440,6 +447,7 @@ function clearMatchRequestAfterAgentError() {
   elements.matchForm.elements.people_needed.value = "2";
   elements.matchForm.elements.title.value = "";
   elements.matchForm.elements.personal_requirement.value = "";
+  elements.matchForm.elements.same_gender_only.checked = false;
   initializeDates();
   setResultView("empty");
   elements.matchForm.querySelector("input[name='category']")?.focus();
@@ -464,6 +472,7 @@ async function handleMatch(event) {
     people_needed: Number(form.get("people_needed")),
     title: String(form.get("title") || "").trim() || null,
     personal_requirement: String(form.get("personal_requirement") || "").trim() || null,
+    same_gender_only: form.has("same_gender_only"),
   };
   try {
     const preview = await api("/matches/preview", {
@@ -618,6 +627,8 @@ function renderCandidates() {
       const genderSummary = candidate.activity
         ? activityGenderSummary(candidate.activity)
         : "";
+      const genderRule = candidate.activity?.same_gender_only
+        ? `<span class="same-gender-tag">仅同性加入</span>` : "";
       return `
         <article class="candidate-card" data-type="${candidate.candidate_type}" data-id="${escapeHtml(candidate.candidate_id)}">
           <input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" aria-label="选择${escapeHtml(copy.title)}" />
@@ -625,6 +636,7 @@ function renderCandidates() {
             ${userHeading}
             <p class="candidate-meta">${escapeHtml(copy.meta)}</p>
             ${genderSummary}
+            ${genderRule}
             <div class="candidate-reasons">${reasons}</div>
             ${skillMarks ? `<div class="candidate-system-marks">${skillMarks}</div>` : ""}
           </div>
@@ -748,20 +760,31 @@ async function loadSquare(append = false) {
   if (!state.token) return;
   const form = new FormData(elements.squareFilterForm);
   const params = new URLSearchParams({
-    sort: String(form.get("sort") || "recommended"),
     offset: String(append ? state.squareOffset : 0),
     limit: "12",
   });
   const category = String(form.get("category") || "").trim();
-  const location = String(form.get("location") || "").trim();
+  const search = String(form.get("search") || "").trim();
+  const date = String(form.get("date") || "").trim();
   if (category) params.set("category", category);
-  if (location) params.set("location", location);
+  if (search) params.set("search", search);
+  if (date) params.set("date", date);
   if (!append) {
     elements.squareList.innerHTML = `<div class="empty-list">正在把活动摊开给你看…</div>`;
   }
   elements.squareLoadMore.disabled = true;
   try {
     const page = await api(`/activities/square?${params.toString()}`);
+    const categorySelect = elements.squareFilterForm.elements.category;
+    categorySelect.innerHTML = `<option value="">全部类型</option>${page.categories
+      .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
+      .join("")}`;
+    if (category && !page.categories.includes(category)) {
+      categorySelect.value = "";
+      await loadSquare(false);
+      return;
+    }
+    categorySelect.value = category;
     state.squareItems = append ? [...state.squareItems, ...page.items] : page.items;
     state.squareOffset = page.next_offset ?? state.squareItems.length;
     state.squareHasMore = page.has_more;
@@ -789,9 +812,10 @@ function renderSquare() {
         ? `<button class="button button-quiet" type="button" disabled>已经加入</button>`
         : item.joinable
           ? `<button class="button button-primary" type="button" data-join-square="${escapeHtml(activity.id)}">加入这场</button>`
-          : `<button class="button button-quiet" type="button" disabled>已经满员</button>`;
+          : `<button class="button button-quiet" type="button" disabled>${escapeHtml(item.join_reason || "暂不能加入")}</button>`;
       return `<article class="square-card">
         <div class="square-card-top"><span class="activity-role">${escapeHtml(activity.category)}</span><span class="square-score">适合度 ${escapeHtml(item.recommendation_score)}</span></div>
+        ${activity.same_gender_only ? `<span class="same-gender-tag">仅同性加入</span>` : ""}
         <h2>${escapeHtml(activity.title)}</h2>
         <p class="square-time">${escapeHtml(formatDate(activity.starts_at))}</p>
         <p class="square-location">${escapeHtml(activity.location)} · ${activity.participant_count}/${activity.capacity} 人</p>
@@ -988,6 +1012,7 @@ function renderActivities() {
           </div>
           <p class="activity-meta"><b>${escapeHtml(formatDate(activity.starts_at))}</b><span>${escapeHtml(activity.location)}</span><span>${escapeHtml(activity.category)} · ${activity.participant_count}/${activity.capacity} 人</span></p>
           ${activityGenderSummary(activity)}
+          ${activity.same_gender_only ? `<span class="same-gender-tag">仅同性加入</span>` : ""}
           ${policy}
           ${item.needs_feedback ? `<div class="review-callout"><strong>趁记忆还热，给搭子留一句真实反馈</strong><span>审核 Agent 会先检查，不会直接凭一条评价重罚。</span></div>` : ""}
           <div class="activity-actions">${feedbackActions}${activityTools}${leaveAction}</div>
@@ -1469,9 +1494,14 @@ async function openActivityParticipants(activityId, activityTitle = "这场活�
 
 function populateProfileForm() {
   if (!state.user) return;
+  window.clearTimeout(state.profileSaveTimer);
   const form = elements.profileForm.elements;
   form.display_name.value = state.user.display_name || "";
-  form.campus.value = state.user.campus || "";
+  form.campus.value = ["南京", "江阴"].includes(state.user.campus) ? state.user.campus : "";
+  elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(form.campus.value));
+  elements.campusMigrationNote.textContent = form.campus.value
+    ? ""
+    : `旧资料${state.user.campus ? `“${state.user.campus}”` : ""}无法确定属于哪个校区，请选择南京或江阴；选择后会自动保存。`;
   form.department.value = state.user.department || "";
   form.grade_year.value = state.user.grade_year || "";
   form.gender.value = state.user.gender || "undisclosed";
@@ -1481,10 +1511,39 @@ function populateProfileForm() {
   form.social_style.value = state.user.social_style || "balanced";
   form.preferred_group_min.value = state.user.preferred_group_min || 2;
   form.preferred_group_max.value = state.user.preferred_group_max || 6;
+  updateGroupRangeOutputs();
   elements.profileCredit.textContent = String(state.user.credit_score);
   renderHobbySkillEditor(state.user.hobby_skills || []);
   renderSkillMarks(state.user.skill_marks || []);
   renderAiSummary();
+  elements.profileStatus.textContent = "修改后会自动保存";
+  elements.profileRetry.classList.add("is-hidden");
+  state.profileSavedSnapshot = JSON.stringify(profilePayload());
+  syncSameGenderChoice();
+}
+
+function updateGroupRangeOutputs(changed = null) {
+  const form = elements.profileForm.elements;
+  let min = Number(form.preferred_group_min.value);
+  let max = Number(form.preferred_group_max.value);
+  if (min > max) {
+    if (changed === "preferred_group_max") min = max;
+    else max = min;
+    form.preferred_group_min.value = String(min);
+    form.preferred_group_max.value = String(max);
+  }
+  document.querySelector("#group-min-output").textContent = `${min} 人`;
+  document.querySelector("#group-max-output").textContent = `${max} 人`;
+  form.preferred_group_min.setAttribute("aria-valuetext", `最少 ${min} 人`);
+  form.preferred_group_max.setAttribute("aria-valuetext", `最多 ${max} 人`);
+}
+
+function syncSameGenderChoice() {
+  const checkbox = elements.matchForm.elements.same_gender_only;
+  const knownGender = ["male", "female"].includes(state.user?.gender);
+  checkbox.disabled = !knownGender;
+  if (!knownGender) checkbox.checked = false;
+  checkbox.closest(".same-gender-choice").classList.toggle("is-unavailable", !knownGender);
 }
 
 function levelLabel(level) {
@@ -1525,6 +1584,7 @@ function addHobbySkill(skill = { name: "", level: 1 }) {
   elements.hobbySkillList.querySelector(".skill-empty")?.remove();
   elements.hobbySkillList.insertAdjacentHTML("beforeend", hobbySkillRow(skill));
   elements.hobbySkillList.lastElementChild?.querySelector("[data-skill-name]")?.focus();
+  elements.profileStatus.textContent = "填写项目名称后会自动保存";
 }
 
 function collectHobbySkills() {
@@ -1596,13 +1656,9 @@ function splitList(value) {
     .filter(Boolean);
 }
 
-async function saveProfile(event) {
-  event.preventDefault();
-  const button = event.submitter;
-  setButtonLoading(button, true, "正在保存…");
-  elements.profileStatus.textContent = "";
+function profilePayload() {
   const form = new FormData(elements.profileForm);
-  const payload = {
+  return {
     display_name: String(form.get("display_name")).trim(),
     campus: String(form.get("campus") || "").trim() || null,
     department: String(form.get("department") || "").trim() || null,
@@ -1616,16 +1672,58 @@ async function saveProfile(event) {
     preferred_group_min: Number(form.get("preferred_group_min")),
     preferred_group_max: Number(form.get("preferred_group_max")),
   };
+}
+
+function queueProfileSave(immediate = false) {
+  if (!state.token) return;
+  state.profileEditRevision += 1;
+  window.clearTimeout(state.profileSaveTimer);
+  elements.profileRetry.classList.add("is-hidden");
+  elements.profileStatus.textContent = "修改待保存…";
+  state.profileSaveTimer = window.setTimeout(flushProfileSave, immediate ? 0 : 700);
+}
+
+async function flushProfileSave() {
+  if (!state.token || state.profileSaveInFlight) return;
+  window.clearTimeout(state.profileSaveTimer);
+  if (!elements.profileForm.checkValidity()) {
+    elements.profileStatus.textContent = "请先填写昵称并选择校区，完成后会自动保存";
+    return;
+  }
+  const payload = profilePayload();
+  const snapshot = JSON.stringify(payload);
+  if (snapshot === state.profileSavedSnapshot) {
+    elements.profileStatus.textContent = "画像已自动保存";
+    return;
+  }
+  const savedRevision = state.profileEditRevision;
+  const token = state.token;
+  state.profileSaveInFlight = true;
+  elements.profileStatus.textContent = "正在自动保存…";
   try {
-    state.user = await api("/users/me", { method: "PATCH", body: JSON.stringify(payload) });
+    const savedUser = await api("/users/me", {
+      method: "PATCH",
+      body: snapshot,
+      keepalive: true,
+    });
+    if (state.token !== token) return;
+    state.user = savedUser;
+    state.profileSavedSnapshot = snapshot;
     elements.accountName.textContent = state.user.display_name;
     elements.profileCredit.textContent = String(state.user.credit_score);
-    elements.profileStatus.textContent = "画像已保存";
-    showToast("画像已更新，下一次匹配会使用新信息");
+    renderSkillMarks(state.user.skill_marks || []);
+    syncSameGenderChoice();
+    elements.profileStatus.textContent = "画像已自动保存";
   } catch (error) {
-    elements.profileStatus.textContent = error.message;
+    if (state.token === token) {
+      elements.profileStatus.textContent = `保存失败：${error.message}`;
+      elements.profileRetry.classList.remove("is-hidden");
+    }
   } finally {
-    setButtonLoading(button, false);
+    state.profileSaveInFlight = false;
+    if (state.token === token && state.profileEditRevision > savedRevision) {
+      queueProfileSave();
+    }
   }
 }
 
@@ -1723,7 +1821,23 @@ function bindEvents() {
     if (button) openPeerReviewDialog(button.dataset.peerTask);
   });
   elements.peerReviewForm.addEventListener("submit", submitPeerReview);
-  elements.profileForm.addEventListener("submit", saveProfile);
+  elements.profileForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    queueProfileSave(true);
+  });
+  elements.profileForm.addEventListener("input", (event) => {
+    if (event.target.name === "preferred_group_min" || event.target.name === "preferred_group_max") {
+      updateGroupRangeOutputs(event.target.name);
+    }
+    queueProfileSave();
+  });
+  elements.profileForm.addEventListener("change", (event) => {
+    if (event.target.name === "campus") {
+      elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(event.target.value));
+    }
+    queueProfileSave(true);
+  });
+  elements.profileRetry.addEventListener("click", () => queueProfileSave(true));
   elements.generateSummaryButton.addEventListener("click", generateAiSummary);
   elements.userProfileDialog.addEventListener("close", () => {
     elements.userProfileContent.innerHTML = "";
@@ -1738,6 +1852,7 @@ function bindEvents() {
     if (!button) return;
     button.closest("[data-skill-row]").remove();
     if (!elements.hobbySkillList.children.length) renderHobbySkillEditor([]);
+    queueProfileSave(true);
   });
   elements.feedbackForm.elements.evaluate_skill.addEventListener("change", (event) => {
     toggleFeedbackSkillFields(event.target.checked);

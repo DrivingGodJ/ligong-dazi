@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import inspect, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+from app.campus import CAMPUSES, infer_campus
+from app.models import User
 
 SQLITE_COMPATIBILITY_COLUMNS = {
     "users": {
@@ -15,6 +18,10 @@ SQLITE_COMPATIBILITY_COLUMNS = {
     },
     "activities": {
         "post_activity_processed_at": "DATETIME",
+        "same_gender_only": "BOOLEAN NOT NULL DEFAULT 0",
+    },
+    "match_requests": {
+        "same_gender_only": "BOOLEAN NOT NULL DEFAULT 0",
     },
     "activity_members": {
         "left_at": "DATETIME",
@@ -51,6 +58,8 @@ async def ensure_sqlite_compatibility(engine: AsyncEngine) -> None:
             }
         )
         for table, columns in SQLITE_COMPATIBILITY_COLUMNS.items():
+            if table not in existing:
+                continue
             present = existing.get(table, set())
             for column, definition in columns.items():
                 if column not in present:
@@ -64,3 +73,18 @@ async def ensure_sqlite_compatibility(engine: AsyncEngine) -> None:
                     "WHERE gender IS NULL OR gender NOT IN ('male', 'female', 'undisclosed')"
                 )
             )
+
+
+async def migrate_user_campuses(session: AsyncSession) -> int:
+    """Normalize identifiable legacy values; leave ambiguous profiles untouched."""
+
+    users = list((await session.scalars(select(User))).all())
+    migrated = 0
+    for user in users:
+        if user.campus in CAMPUSES:
+            continue
+        campus = infer_campus(user.campus, user.preferred_locations)
+        if campus is not None:
+            user.campus = campus
+            migrated += 1
+    return migrated

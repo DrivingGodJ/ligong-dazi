@@ -45,6 +45,7 @@ async def register_user(
             "password": password,
             "display_name": display_name,
             "university": "南京理工大学",
+            "campus": "南京",
         },
     )
     assert response.status_code == 201, response.text

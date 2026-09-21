@@ -60,6 +60,7 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
             "email": "owner@njust.edu.cn",
             "password": "test-password-123",
             "display_name": "重复用户",
+            "campus": "南京",
         },
     )
     assert duplicate.status_code == 409

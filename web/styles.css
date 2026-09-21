@@ -375,12 +375,32 @@ input,
 select,
 textarea {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   color: var(--ink-950);
   background: #fff;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-small);
   outline: 0;
   transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+label,
+fieldset,
+.form-section {
+  min-width: 0;
+}
+
+input[type="datetime-local"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+input[type="datetime-local"]::-webkit-date-and-time-value {
+  min-width: 0;
+  text-align: left;
 }
 
 input,
@@ -834,7 +854,7 @@ a:focus-visible {
 
 .two-columns {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.7rem;
 }
 
@@ -1579,6 +1599,21 @@ a:focus-visible {
   font-weight: 800;
 }
 
+.gender-choice-grid b,
+.gender-badge b,
+.gender-count b {
+  display: inline-grid;
+  width: 1.2em;
+  flex: 0 0 1.2em;
+  place-items: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.profile-gender-choice {
+  grid-column: 1 / -1;
+}
+
 .gender-choice-grid input:focus-visible + span,
 .gender-choice-grid input:checked + span {
   border-color: currentcolor;
@@ -2125,13 +2160,13 @@ a:focus-visible {
 
 .profile-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
 }
 
 .group-range {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.65rem;
 }
 
@@ -2149,6 +2184,63 @@ a:focus-visible {
   color: var(--success-700);
   font-size: 0.86rem;
   font-weight: 700;
+}
+
+.profile-logout {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 980px;
+  margin-top: 1.2rem;
+  padding: 1.2rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.same-gender-choice {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.9rem;
+  background: var(--brand-50);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.same-gender-choice input {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  flex: 0 0 22px;
+  margin: 0.15rem 0 0;
+  padding: 0;
+  accent-color: var(--brand-600);
+}
+
+.same-gender-choice strong,
+.same-gender-choice small {
+  display: block;
+}
+
+.same-gender-choice small {
+  margin-top: 0.15rem;
+  color: var(--ink-600);
+  font-weight: 500;
+}
+
+.same-gender-choice.is-unavailable {
+  cursor: not-allowed;
+}
+
+.same-gender-tag {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  color: var(--brand-800);
+  background: var(--brand-100);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .modal-card {
@@ -2425,6 +2517,37 @@ a:focus-visible {
 }
 
 @media (max-width: 660px) {
+  .app-header:not(.admin-header) {
+    grid-template-columns: 1fr;
+  }
+
+  .app-header:not(.admin-header) .main-nav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.1rem;
+    overflow: visible;
+  }
+
+  .app-header:not(.admin-header) .nav-button {
+    min-width: 0;
+    min-height: 48px;
+    padding: 0.4rem 0.12rem;
+    font-size: 0.76rem;
+    line-height: 1.2;
+    white-space: normal;
+  }
+
+  .app-header:not(.admin-header) .nav-badge {
+    position: absolute;
+    top: -0.3rem;
+    right: -0.15rem;
+    margin: 0;
+  }
+
+  .account-area {
+    display: none;
+  }
+
   .app-header {
     min-height: 66px;
     padding: 0.6rem 0.8rem;
@@ -2470,7 +2593,11 @@ a:focus-visible {
   .location-people,
   .profile-grid,
   .group-range {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .profile-logout .button {
+    width: 100%;
   }
 
   .hobby-skill-row {
