@@ -47,7 +47,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "RAILWAY_VOLUME_MOUNT_PATH"
             ) != "/app/data":
                 raise RuntimeError("Railway 上必须先挂载 /app/data 持久化存储")
-            load_persisted_ai_config(app_settings)
+            if os.environ.get("ZEABUR_ENVIRONMENT_ID") and not await asyncio.to_thread(
+                os.path.ismount, "/app/data"
+            ):
+                raise RuntimeError("Zeabur 上必须先挂载 /app/data 持久化存储")
+            await asyncio.to_thread(load_persisted_ai_config, app_settings)
         database = DatabaseRuntime(app_settings)
         app.state.database = database
         photo_directory = await asyncio.to_thread(

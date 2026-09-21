@@ -4,7 +4,7 @@
 
 最新一轮功能变化见 [CHANGELOG.md](CHANGELOG.md)。
 
-海外托管的单服务上线步骤见 [DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)。网页、API 和远程管理后台共用一个 HTTPS 网址，不需要先买服务器或域名。
+海外托管的单服务上线步骤见 [DEPLOY_ZEABUR.md](DEPLOY_ZEABUR.md)；[Railway 方案](DEPLOY_RAILWAY.md)也保留作备选。网页、API 和远程管理后台共用一个 HTTPS 网址，不需要自备服务器或域名。
 
 当前无需购买模型 API。默认的 `deterministic` 模式会使用与参赛方案一致的可解释评分规则完成整条流程。以后配置兼容 OpenAI Tool Calling 协议的模型地址和 Key 后，模型可自主选择查询工具、设置候选范围并在安全评分结果内重新排序；调用失败时会自动回退到规则 Agent。
 

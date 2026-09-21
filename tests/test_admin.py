@@ -4,6 +4,7 @@ import stat
 from pathlib import Path
 
 import httpx
+import pytest
 from asgi_lifespan import LifespanManager
 from pydantic import SecretStr
 
@@ -174,3 +175,17 @@ async def test_production_admin_login_and_persisted_config(tmp_path: Path) -> No
         assert restarted_settings.ai_vendor == "deepseek"
         assert restarted_settings.ai_provider == "openai_compatible"
         assert restarted_settings.ai_api_key.get_secret_value() == "test-persisted-key-not-real"
+
+
+async def test_zeabur_startup_needs_persistent_volume(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ZEABUR_ENVIRONMENT_ID", "test-zeabur-environment")
+    settings = Settings(
+        environment="production",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'unused.db'}",
+        jwt_secret=SecretStr("test-jwt-secret-for-production-admin"),
+        admin_password=SecretStr("a-strong-admin-password-for-tests"),
+        config_file_path=str(tmp_path / "admin.env"),
+    )
+    with pytest.raises(RuntimeError, match="必须先挂载 /app/data"):
+        async with LifespanManager(create_app(settings)):
+            pass
