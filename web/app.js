@@ -816,7 +816,7 @@ async function loadInvitations(silent = false) {
 
 function renderInvitations(invitations) {
   if (!invitations.length) {
-    elements.invitationList.innerHTML = `<div class="empty-list">目前没有收到邀请。发起一次匹配，或切换另一个演示账号试试。</div>`;
+    elements.invitationList.innerHTML = `<div class="empty-list">目前没有收到邀请。发起一次匹配，或去活动广场看看。</div>`;
     return;
   }
   elements.invitationList.innerHTML = invitations
@@ -1604,6 +1604,9 @@ async function saveProfile(event) {
 }
 
 function bindEvents() {
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) {
+    document.querySelector(".demo-login")?.remove();
+  }
   document.querySelector("#login-tab").addEventListener("click", () => switchAuthPanel("login"));
   document.querySelector("#register-tab").addEventListener("click", () => switchAuthPanel("register"));
   elements.loginForm.addEventListener("submit", handleLogin);
