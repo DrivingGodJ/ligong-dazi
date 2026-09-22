@@ -1577,7 +1577,7 @@ function imageToCompressedBlob(file) {
       try {
         const longest = Math.max(image.naturalWidth, image.naturalHeight);
         if (!longest) throw new Error("照片尺寸无效，请重新选择");
-        const scale = Math.min(1, 1600 / longest);
+        const scale = Math.min(1, 1280 / longest);
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
         canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -1586,10 +1586,15 @@ function imageToCompressedBlob(file) {
         context.fillStyle = "#fff";
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
+        const encode = (quality, retry = false) => canvas.toBlob((blob) => {
           if (!blob) { reject(new Error("照片压缩失败，请重新选择")); return; }
+          if (blob.size > 600 * 1024 && !retry) {
+            encode(0.48, true);
+            return;
+          }
           resolve(blob);
-        }, "image/jpeg", 0.78);
+        }, "image/jpeg", quality);
+        encode(0.62);
       } catch (error) {
         reject(error);
       }
@@ -1758,40 +1763,17 @@ function renderUserProfilePage(page) {
   const system = page.system_profile;
   const gradeLabels = ["", "大一", "大二", "大三", "大四", "研一", "研二", "研三", "博士生"];
   const styleLabels = { quiet: "偏安静", balanced: "都可以", outgoing: "偏外向" };
-  const attendanceLabels = {
-    attended: "正常参加",
-    cancelled_early: "没有出现",
-    late_cancel: "没有出现",
-    no_show: "没有出现",
-  };
-  const incidentLabels = {
-    punctual: "准时到场",
-    helpful: "乐于帮忙",
-    clear_communication: "沟通清楚",
-    late: "有迟到",
-    cancelled: "临时取消",
-    no_show: "没有出现",
-    unsafe_behavior: "存在安全风险",
-    skill_level_mismatch: "爱好水平存在争议",
-    suspected_smurfing: "疑似高手低报",
-  };
   const skills = (user.hobby_skills || []).map(
     (skill) => `${skill.name} · ${levelLabel(skill.level)}`,
   );
   const activitySignals = (system.activity_signals || []).map(
-    (item) => `${item.category} ${item.count} 次`,
+    (item) => item.category,
   );
   const personalitySignals = (system.personality_signals || []).map(
-    (item) => `${item.label} · ${item.count} 人次反馈`,
+    (item) => item.label,
   );
-  const attendanceSignals = Object.entries(system.attendance_signals || {})
-    .filter(([, count]) => count)
-    .map(([key, count]) => `${attendanceLabels[key] || key} ${count} 次`);
-  const incidentSignals = Object.entries(system.incident_signals || {})
-    .filter(([, count]) => count)
-    .map(([key, count]) => `${incidentLabels[key] || key} ${count} 次`);
   const systemMarks = (system.skill_marks || [])
-    .map((mark) => `<div class="profile-system-alert"><strong>${escapeHtml(mark.name)}</strong><span>${escapeHtml(mark.label)} · ${escapeHtml(mark.feedback_count)} 条有效反馈</span></div>`)
+    .map((mark) => `<div class="profile-system-alert"><strong>${escapeHtml(mark.name)}</strong><span>${escapeHtml(mark.label)}</span></div>`)
     .join("");
   elements.userProfileContent.innerHTML = `
     <header class="profile-dialog-hero">
@@ -1814,20 +1796,12 @@ function renderUserProfilePage(page) {
     <section class="profile-page-section system-profile-section">
       <div class="profile-section-heading"><span>系统画像</span><h3>活动与评价形成的印象</h3></div>
       <p class="profile-system-note">这些内容由活动记录和通过审核的评价自动整理，TA 不能直接修改。</p>
-      <div class="profile-metrics">
-        <div><strong>${escapeHtml(system.completed_activity_count)}</strong><span>已完成活动</span></div>
-        <div><strong>${system.average_rating == null ? "—" : escapeHtml(system.average_rating)}</strong><span>平均评分</span></div>
-        <div><strong>${escapeHtml(system.finalized_feedback_count)}</strong><span>有效评价</span></div>
-      </div>
       <blockquote class="profile-system-summary">${escapeHtml(system.summary)}</blockquote>
       <div class="profile-fact-grid">
-        <div><small>常参加的活动</small>${profileChipList(activitySignals, "还没有稳定记录")}</div>
-        <div><small>他人印象</small>${profileChipList(personalitySignals, "评价还不够多")}</div>
-        <div><small>到场记录</small>${profileChipList(attendanceSignals, "暂时没有到场反馈")}</div>
-        <div><small>事实反馈</small>${profileChipList(incidentSignals, "暂时没有特别记录")}</div>
+        <div><small>常参加的活动</small>${profileChipList(activitySignals.slice(0, 2), "还没有稳定记录")}</div>
+        <div><small>相处印象</small>${profileChipList(personalitySignals.slice(0, 2), "评价还不够多")}</div>
       </div>
       ${systemMarks ? `<div class="profile-system-alerts">${systemMarks}</div>` : ""}
-      <p class="profile-review-integrity">评价可信记录：${escapeHtml(system.review_integrity.supported_feedback_count || 0)} 条获同场复核支持，${escapeHtml(system.review_integrity.unsupported_serious_feedback_count || 0)} 条严重评价被判定缺乏依据。</p>
     </section>`;
 }
 

@@ -5,8 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from app.models import Notification, User
+from app.models import Activity, Notification, User
 from app.notifications import dispatch_push, enqueue_activity_reminders
+from app.post_activity import process_completed_activities
 from tests.conftest import register_user
 
 
@@ -155,6 +156,51 @@ async def test_reminder_fifteen_minutes_idempotent(client) -> None:
     assert (await client.get("/manifest.webmanifest")).status_code == 200
     assert (await client.get("/service-worker.js")).status_code == 200
     assert (await client.get("/api/v1/push/public-key")).json()["public_key"]
+
+
+async def test_completed_activity_notifies_each_companion_once_but_not_solo(client) -> None:
+    _, owner = await register_user(client, "review-owner@example.com", "活动发起人")
+    _, partner = await register_user(client, "review-partner@example.com", "活动搭子")
+    start = datetime.now(UTC) + timedelta(days=1)
+    paired = (
+        await client.post("/api/v1/activities", headers=owner, json=activity_payload(start))
+    ).json()
+    solo = (
+        await client.post(
+            "/api/v1/activities", headers=owner, json=activity_payload(start + timedelta(days=1))
+        )
+    ).json()
+    assert (
+        await client.post(f"/api/v1/activities/{paired['id']}/join", headers=partner)
+    ).status_code == 200
+    assert not any(
+        item["kind"] == "feedback_due"
+        for item in (await client.get("/api/v1/notifications", headers=partner)).json()
+    )
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        for activity_id in (paired["id"], solo["id"]):
+            activity = await session.get(Activity, activity_id)
+            assert activity is not None
+            activity.starts_at = datetime.now(UTC) - timedelta(hours=2)
+            activity.ends_at = datetime.now(UTC) - timedelta(minutes=1)
+        await session.commit()
+        assert await process_completed_activities(session) == 2
+        await session.commit()
+        assert await process_completed_activities(session) == 0
+        await session.commit()
+        notices = list(
+            (await session.scalars(select(Notification).where(Notification.kind == "feedback_due")))
+            .all()
+        )
+        assert len(notices) == 2
+        assert {item.event_key for item in notices} == {f"feedback_due:{paired['id']}"}
+        assert all(item.url == "/?tab=activities" for item in notices)
+    mine = (await client.get("/api/v1/activities/mine", headers=partner)).json()
+    assert next(item for item in mine if item["activity"]["id"] == paired["id"])[
+        "needs_feedback"
+    ]
 
 
 async def test_invite_public_join_and_time_vote_each_create_messages(client) -> None:

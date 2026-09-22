@@ -17,6 +17,7 @@ from app.models import (
     User,
     utcnow,
 )
+from app.notifications import enqueue_notification
 
 PERSONALITY_LABELS = {
     "quiet": "偏安静",
@@ -516,6 +517,16 @@ async def process_completed_activities(
             user = await session.get(User, user_id)
             if user is not None:
                 await refresh_hidden_profile(session, user)
+            if len(member_ids) > 1:
+                await enqueue_notification(
+                    session,
+                    user_id,
+                    f"feedback_due:{activity.id}",
+                    "feedback_due",
+                    "这场搭子局结束啦",
+                    f"“{activity.title}”已结束，去“我的活动”给同行的搭子留下真实评价吧。",
+                    "/?tab=activities",
+                )
         activity.post_activity_processed_at = current
         session.add(
             SystemEvent(
