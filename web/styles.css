@@ -76,6 +76,29 @@ body > .main-nav .nav-badge { position: absolute; top: 0; right: 7%; transform: 
 .notification-item { padding: 0.8rem; border-bottom: 1px solid var(--line); }
 .notification-item.is-unread { border-left: 3px solid var(--brand-600); }
 .notification-item p { margin: 0.3rem 0; }
+.activity-updates { display: grid; gap: 0.65rem; margin: 0.8rem 0 1rem; }
+.activity-update {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.7rem;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--brand-500);
+  border-radius: 14px;
+  background: var(--brand-50);
+  box-shadow: var(--shadow-small);
+}
+.activity-update p { margin: 0.2rem 0 0; color: var(--ink-700); line-height: 1.45; }
+.activity-update-icon { font-size: 1.3rem; }
+.activity-update.is-arriving { animation: activity-update-enter 360ms cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes activity-update-enter {
+  from { opacity: 0; transform: translateY(-10px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (max-width: 560px) {
+  .activity-update { grid-template-columns: auto minmax(0, 1fr); }
+  .activity-update .button { grid-column: 2; justify-self: start; }
+}
 .legacy-student-id { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 360px); gap: 1rem; padding: clamp(1rem, 3vw, 1.5rem); margin: 1rem 0; border: 1px solid var(--brand-500); border-radius: 16px; background: var(--brand-50); }
 .legacy-student-id h2 { margin: 0.15rem 0 0.4rem; font-size: 1.15rem; }
 .legacy-student-id p { margin: 0; color: var(--ink-700); line-height: 1.5; }

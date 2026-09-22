@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.migrations import ensure_sqlite_compatibility
+from app.migrations import ensure_sqlite_compatibility, remove_emails_from_bound_accounts
 from app.models import User
 from app.notifications import enqueue_legacy_student_id_notices
 from tests.conftest import register_user
@@ -124,6 +124,17 @@ async def test_old_email_account_can_claim_unique_student_id(client) -> None:
     )
     assert claimed.status_code == 200
     assert claimed.json()["student_id"] == "202600001234"
+    assert claimed.json()["email"] is None
+    async with app.state.database.session_factory() as session:
+        old = await session.get(User, claimed.json()["id"])
+        assert old is not None
+        assert old.email.endswith("@accounts.invalid")
+    assert (
+        await client.post(
+            "/api/v1/auth/token",
+            json={"account": "old-email@example.com", "password": "test-password-123"},
+        )
+    ).status_code == 401
     assert (
         await client.post(
             "/api/v1/auth/token", json={"account": "202600001234", "password": "test-password-123"}
@@ -134,6 +145,17 @@ async def test_old_email_account_can_claim_unique_student_id(client) -> None:
             "/api/v1/users/me", headers=old_headers, json={"student_id": "202600001235"}
         )
     ).status_code == 409
+
+
+async def test_previously_bound_accounts_have_legacy_emails_removed(client) -> None:
+    _, headers = await register_user(client, "already-bound@example.com", "早已绑定")
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        assert await remove_emails_from_bound_accounts(session) == 1
+        await session.commit()
+        assert await remove_emails_from_bound_accounts(session) == 0
+    me = (await client.get("/api/v1/users/me", headers=headers)).json()
+    assert me["email"] is None
 
 
 async def test_existing_sqlite_users_table_gets_unique_student_id(tmp_path) -> None:

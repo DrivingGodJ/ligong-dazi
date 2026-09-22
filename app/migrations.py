@@ -4,7 +4,7 @@ from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.campus import CAMPUSES, infer_campus
-from app.models import User
+from app.models import User, new_id
 
 SQLITE_COMPATIBILITY_COLUMNS = {
     "users": {
@@ -94,6 +94,23 @@ async def migrate_user_campuses(session: AsyncSession) -> int:
             user.campus = campus
             migrated += 1
     return migrated
+
+
+async def remove_emails_from_bound_accounts(session: AsyncSession) -> int:
+    """Remove legacy login emails once a student ID is bound (email column is NOT NULL)."""
+    users = list(
+        (
+            await session.scalars(
+                select(User).where(
+                    User.student_id.is_not(None),
+                    User.email.not_like("%@accounts.invalid"),
+                )
+            )
+        ).all()
+    )
+    for user in users:
+        user.email = f"no-email-{new_id()}@accounts.invalid"
+    return len(users)
 
 
 async def migrate_activity_campuses(session: AsyncSession) -> int:

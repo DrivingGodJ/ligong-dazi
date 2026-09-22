@@ -13,8 +13,8 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icon-192.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=18" />
-    <script src="/static/app.js?v=18" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=19" />
+    <script src="/static/app.js?v=19" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -84,7 +84,7 @@
               <label>
                 学号或旧账号邮箱
                 <input name="account" type="text" inputmode="text" autocomplete="username" maxlength="320" required />
-                <span class="field-help">以前用邮箱注册的同学仍可用原邮箱登录，进入后补填学号。</span>
+                <span class="field-help">旧账号绑定学号前可用邮箱登录；绑定后请改用学号。</span>
               </label>
               <label>
                 密码
@@ -331,7 +331,7 @@
                   </svg>
                 </div>
                 <h2>等待你的需求</h2>
-                <p>提交后，这里会显示 Agent 的查询过程、候选搭子和每一项匹配理由。</p>
+                <p>提交后，这里会直接显示找到的活动、候选搭子和匹配理由。</p>
               </div>
 
               <div id="result-running" class="running-state is-hidden" aria-live="polite">
@@ -356,8 +356,6 @@
                   <button id="new-match-button" class="button button-quiet" type="button">重新匹配</button>
                 </div>
 
-                <div id="agent-trace" class="trace-strip" aria-label="Agent 工具调用记录"></div>
-                <div id="personalization-report" class="notice-stack"></div>
                 <div id="candidate-list" class="candidate-list"></div>
 
                 <div id="confirm-bar" class="confirm-bar is-hidden">
@@ -456,6 +454,7 @@
             <button class="filter-chip" type="button" data-activity-filter="review">待评价</button>
             <button class="filter-chip" type="button" data-activity-filter="history">过去的</button>
           </div>
+          <section id="activity-updates" class="activity-updates is-hidden" aria-label="活动新动态" aria-live="polite" aria-relevant="additions text"></section>
           <section id="applications-section" class="applications-section is-hidden" aria-labelledby="applications-heading">
             <h2 id="applications-heading">等你点头的入局申请</h2>
             <p>每位现有成员都同意后，新搭子才正式加入。点昵称可以先看看档案。</p>
@@ -493,7 +492,7 @@
             <div>
               <p class="eyebrow">旧账号升级</p>
               <h2 id="legacy-student-heading">补填学号，之后登录更方便</h2>
-              <p>旧邮箱和密码仍然能登录。学号只用于账号识别，不会展示给其他同学；补填后学号不能自行修改。</p>
+              <p>绑定前可用旧邮箱登录；绑定学号后旧邮箱会被移除，以后请用学号登录。学号不会展示给其他同学，绑定后不能自行修改。</p>
             </div>
             <form id="claim-student-id-form" class="claim-student-id-form">
               <label>我的学号
@@ -806,7 +805,7 @@
         <p class="modal-copy">照片加载可能较慢，请稍候；如果加载失败，可以点击重试。</p>
         <form id="activity-photo-form" class="photo-upload-row">
           <input name="activity_id" type="hidden" />
-          <label class="file-picker">选择照片<input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required /></label>
+          <label class="file-picker">点击选择相机拍照（也可从相册选取）<input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required /></label>
           <button class="button button-primary" type="submit">上传给搭子</button>
         </form>
         <p id="activity-photo-error" class="form-error is-hidden" role="alert"></p>

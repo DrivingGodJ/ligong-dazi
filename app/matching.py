@@ -190,6 +190,14 @@ async def search_open_activities(
         .group_by(ActivityMember.activity_id)
         .subquery()
     )
+    gender_condition = Activity.same_gender_only.is_(False)
+    if context.requester.gender in {"male", "female"}:
+        gender_condition = or_(
+            gender_condition,
+            Activity.owner_id.in_(
+                select(User.id).where(User.gender == context.requester.gender)
+            ),
+        )
     statement = (
         select(Activity, func.coalesce(member_count.c.member_count, 0))
         .outerjoin(member_count, member_count.c.activity_id == Activity.id)
@@ -208,12 +216,7 @@ async def search_open_activities(
             Activity.starts_at >= context.starts_at - ACTIVITY_START_TOLERANCE,
             Activity.starts_at <= context.starts_at + ACTIVITY_START_TOLERANCE,
             (Activity.capacity - func.coalesce(member_count.c.member_count, 0)) >= 1,
-            or_(
-                Activity.same_gender_only.is_(False),
-                Activity.owner_id.in_(
-                    select(User.id).where(User.gender == context.requester.gender)
-                ),
-            ),
+            gender_condition,
         )
     )
     rows = [(row[0], int(row[1])) for row in (await session.execute(statement)).all()]

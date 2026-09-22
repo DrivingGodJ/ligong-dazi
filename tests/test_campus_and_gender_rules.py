@@ -110,6 +110,20 @@ async def test_same_gender_rule_blocks_all_join_paths(client) -> None:
     for headers in (woman, undisclosed):
         denied = await client.post(f"/api/v1/activities/{activity_id}/join", headers=headers)
         assert denied.status_code == 403
+    unknown_preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=undisclosed,
+        json={
+            "category": "跑步",
+            "starts_at": start.isoformat(),
+            "ends_at": (start + timedelta(hours=2)).isoformat(),
+            "people_needed": 2,
+        },
+    )
+    assert unknown_preview.status_code == 201
+    assert activity_id not in {
+        item["candidate_id"] for item in unknown_preview.json()["candidates"]
+    }
     joined = await client.post(f"/api/v1/activities/{activity_id}/join", headers=man)
     assert joined.status_code == 200
     await client.patch("/api/v1/users/me", headers=man, json={"gender": "female"})
@@ -122,6 +136,7 @@ async def test_matching_only_offers_same_gender_and_checks_invite_acceptance(cli
     _, owner_headers = await register_user(client, "match-owner@njust.edu.cn", "发起人")
     _, man_headers = await register_user(client, "match-man@njust.edu.cn", "男候选")
     _, woman_headers = await register_user(client, "match-woman@njust.edu.cn", "女候选")
+    _, unknown_headers = await register_user(client, "match-unknown@njust.edu.cn", "未定性别")
     await client.patch("/api/v1/users/me", headers=owner_headers, json={"gender": "male"})
     man = await client.patch("/api/v1/users/me", headers=man_headers, json={"gender": "male"})
     woman = await client.patch("/api/v1/users/me", headers=woman_headers, json={"gender": "female"})
@@ -159,7 +174,17 @@ async def test_matching_only_offers_same_gender_and_checks_invite_acceptance(cli
     }
     assert man.json()["id"] in candidates
     assert woman.json()["id"] not in candidates
+    unknown = (await client.get("/api/v1/users/me", headers=unknown_headers)).json()
+    assert unknown["id"] not in candidates
     assert all(item["candidate_type"] == "user" for item in preview.json()["candidates"])
+    await client.patch("/api/v1/users/me", headers=man_headers, json={"gender": "undisclosed"})
+    cannot_invite = await client.post(
+        f"/api/v1/matches/{preview.json()['match_request_id']}/confirm",
+        headers=owner_headers,
+        json={"candidate_user_ids": [man.json()["id"]]},
+    )
+    assert cannot_invite.status_code == 422
+    await client.patch("/api/v1/users/me", headers=man_headers, json={"gender": "male"})
     confirmed = await client.post(
         f"/api/v1/matches/{preview.json()['match_request_id']}/confirm",
         headers=owner_headers,

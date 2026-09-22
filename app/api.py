@@ -230,7 +230,9 @@ async def activity_join_block_reason(
     if not activity.same_gender_only or user.id == activity.owner_id:
         return None
     owner_gender = await session.scalar(select(User.gender).where(User.id == activity.owner_id))
-    if user.gender not in {"male", "female"} or user.gender != owner_gender:
+    if user.gender not in {"male", "female"}:
+        return "性别未选定或不公开，不能加入仅限同性的活动"
+    if user.gender != owner_gender:
         return "这场活动仅限与发起人同性的搭子加入"
     return None
 
@@ -315,7 +317,7 @@ async def apply_to_activity(
             "join_application",
             "有人想加入你们的活动",
             f"{user.display_name}申请加入“{activity.title}”，查看档案后请表态。",
-            "/?tab=activities",
+            f"/?tab=activities&activity={activity.id}",
         )
     return application
 
@@ -615,6 +617,9 @@ async def update_me(
         if field_name == "hobby_skills":
             value = [item.model_dump() if hasattr(item, "model_dump") else item for item in value]
         setattr(current_user, field_name, value)
+    if "student_id" in values and not current_user.email.endswith("@accounts.invalid"):
+        # Legacy email accounts switch to student-ID-only sign-in once the ID is bound.
+        current_user.email = f"no-email-{new_id()}@accounts.invalid"
     if values.get("campus") in {"南京", "江阴"}:
         await session.execute(
             update(Activity)
@@ -1610,7 +1615,7 @@ async def create_activity_time_vote(
                 "time_vote",
                 "搭子提议改时间",
                 f"{current_user.display_name}想调整“{activity.title}”的时间，请看看是否同意。",
-                "/?tab=activities",
+                f"/?tab=activities&activity={activity.id}",
             )
     member_count = int(
         await session.scalar(
@@ -1980,10 +1985,13 @@ async def confirm_match(
             selected_genders = (
                 await session.execute(select(User.id, User.gender).where(User.id.in_(selected_ids)))
             ).all()
-            if any(gender != current_user.gender for _, gender in selected_genders):
+            if len(selected_genders) != len(selected_ids) or any(
+                gender not in {"male", "female"} or gender != current_user.gender
+                for _, gender in selected_genders
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="仅限同性活动不能邀请其他性别的搭子",
+                    detail="仅限同性活动只能邀请已选择男或女、且与发起人同性的搭子",
                 )
         if not selected_ids.issubset(allowed_users):
             raise HTTPException(
@@ -2189,6 +2197,20 @@ async def list_notifications(
         ).all()
     )
     return [NotificationPublic.model_validate(item) for item in rows]
+
+
+@router.post("/notifications/read-all")
+async def mark_all_notifications_read(
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> dict[str, bool]:
+    await session.execute(
+        update(Notification)
+        .where(Notification.user_id == current_user.id, Notification.read_at.is_(None))
+        .values(read_at=utcnow())
+    )
+    await session.commit()
+    return {"ok": True}
 
 
 @router.post("/notifications/{notification_id}/read", response_model=NotificationPublic)

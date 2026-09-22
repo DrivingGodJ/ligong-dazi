@@ -23,6 +23,7 @@ from app.migrations import (
     ensure_sqlite_compatibility,
     migrate_activity_campuses,
     migrate_user_campuses,
+    remove_emails_from_bound_accounts,
 )
 from app.models import Base
 from app.notifications import (
@@ -85,6 +86,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             migrated_campuses = await migrate_user_campuses(session)
             if migrated_campuses:
                 logger.info("已将 %s 位用户的旧校区资料归一为南京或江阴", migrated_campuses)
+            removed_emails = await remove_emails_from_bound_accounts(session)
+            if removed_emails:
+                logger.info("已移除 %s 位已绑定学号用户的旧邮箱", removed_emails)
             await migrate_activity_campuses(session)
             await enqueue_legacy_student_id_notices(session)
             await process_completed_activities(session)

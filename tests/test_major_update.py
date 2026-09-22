@@ -158,6 +158,37 @@ async def test_reminder_fifteen_minutes_idempotent(client) -> None:
     assert (await client.get("/api/v1/push/public-key")).json()["public_key"]
 
 
+async def test_opening_inbox_can_mark_all_notifications_read(client) -> None:
+    _, owner = await register_user(client, "inbox-owner@example.com", "收消息的人")
+    _, other = await register_user(client, "inbox-other@example.com", "另一位")
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        owner_user = await session.scalar(
+            select(User).where(User.email == "inbox-owner@example.com")
+        )
+        other_user = await session.scalar(
+            select(User).where(User.email == "inbox-other@example.com")
+        )
+        for index in range(3):
+            session.add(
+                Notification(
+                    user_id=owner_user.id if index < 2 else other_user.id,
+                    event_key=f"inbox-{index}",
+                    kind="time_vote",
+                    title="活动消息",
+                    body="请看看",
+                    url="/?tab=activities",
+                )
+            )
+        await session.commit()
+    marked = await client.post("/api/v1/notifications/read-all", headers=owner)
+    assert marked.json() == {"ok": True}
+    owner_messages = (await client.get("/api/v1/notifications", headers=owner)).json()
+    other_messages = (await client.get("/api/v1/notifications", headers=other)).json()
+    assert all(item["read_at"] for item in owner_messages)
+    assert any(not item["read_at"] for item in other_messages)
+
+
 async def test_completed_activity_notifies_each_companion_once_but_not_solo(client) -> None:
     _, owner = await register_user(client, "review-owner@example.com", "活动发起人")
     _, partner = await register_user(client, "review-partner@example.com", "活动搭子")

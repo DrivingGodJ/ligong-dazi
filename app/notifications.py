@@ -117,7 +117,7 @@ async def enqueue_legacy_student_id_notices(session: AsyncSession) -> None:
             "student_id_migration_20260922",
             "account_update",
             "旧账号请补填学号",
-            "原邮箱和密码仍可登录。到“我的画像”绑定学号，之后也能用学号登录。",
+            "绑定前仍可用原邮箱登录。到“我的画像”绑定学号后，旧邮箱会被移除，请改用学号登录。",
             "/?tab=profile",
         )
 

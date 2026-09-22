@@ -20,6 +20,11 @@ const state = {
   photoLoadGeneration: 0,
   peerTasks: [],
   applications: [],
+  notifications: [],
+  renderedActivityUpdateIds: "",
+  activityUpdateSeenIds: new Set(),
+  notificationTimer: null,
+  notificationLoadRevision: 0,
   runningTimer: null,
   summaryTimer: null,
   toastTimer: null,
@@ -42,6 +47,7 @@ const elements = {
   notificationsList: document.querySelector("#notifications-list"),
   applicationsSection: document.querySelector("#applications-section"),
   applicationsList: document.querySelector("#applications-list"),
+  activityUpdates: document.querySelector("#activity-updates"),
   accountArea: document.querySelector("#account-area"),
   accountName: document.querySelector("#account-name"),
   authError: document.querySelector("#auth-error"),
@@ -65,8 +71,6 @@ const elements = {
   runningTitle: document.querySelector("#running-title"),
   progressBar: document.querySelector("#progress-bar"),
   resultSummary: document.querySelector("#result-summary"),
-  agentTrace: document.querySelector("#agent-trace"),
-  personalizationReport: document.querySelector("#personalization-report"),
   candidateList: document.querySelector("#candidate-list"),
   confirmBar: document.querySelector("#confirm-bar"),
   selectionSummary: document.querySelector("#selection-summary"),
@@ -296,6 +300,11 @@ function showAuthenticatedShell() {
   loadInvitations(true);
   loadActivities(true);
   loadNotifications();
+  if (!state.notificationTimer) {
+    state.notificationTimer = window.setInterval(() => {
+      if (state.token && !document.hidden) loadNotifications();
+    }, 45_000);
+  }
   refreshPushStatus();
 }
 
@@ -319,12 +328,18 @@ async function logout(showMessage = true) {
     } catch { /* Local sign-out still completes even if push is unavailable. */ }
   }
   window.clearTimeout(state.profileSaveTimer);
+  window.clearInterval(state.notificationTimer);
+  state.notificationTimer = null;
+  state.notificationLoadRevision += 1;
   state.profileEditRevision += 1;
   state.token = null;
   state.user = null;
   state.preview = null;
   state.selectedUsers.clear();
   state.selectedActivity = null;
+  state.notifications = [];
+  state.renderedActivityUpdateIds = "";
+  state.activityUpdateSeenIds.clear();
   localStorage.removeItem(TOKEN_KEY);
   showAuthShell();
   switchAuthPanel("login");
@@ -482,7 +497,10 @@ function switchTab(tabName) {
     panel.classList.toggle("is-hidden", panel.dataset.panel !== tabName);
   });
   if (tabName === "invitations") loadInvitations();
-  if (tabName === "activities") loadActivities();
+  if (tabName === "activities") {
+    loadActivities();
+    renderActivityUpdates();
+  }
   if (tabName === "square") loadSquare(false);
   if (tabName === "match" && !state.preview) loadAgentMode();
   if (tabName === "invitations" || tabName === "activities") loadNotifications();
@@ -625,7 +643,6 @@ async function handleMatch(event) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    const run = await api(`/agent-runs/${preview.agent_run_id}`).catch(() => null);
     finishRunningProgress();
     state.preview = {
       ...preview,
@@ -633,7 +650,6 @@ async function handleMatch(event) {
       requestedLocation: payload.location,
       requestedStartsAt: payload.starts_at,
       requestedEndsAt: payload.ends_at,
-      run,
     };
     elements.confirmLocation.value = "";
     elements.confirmLocationError.classList.add("is-hidden");
@@ -651,42 +667,6 @@ async function handleMatch(event) {
   } finally {
     setButtonLoading(elements.matchSubmit, false);
   }
-}
-
-function renderAgentTrace() {
-  const toolLabels = {
-    search_activities: ["查询已有活动", "检查同类活动、邻近时段与空余名额"],
-    search_users: ["寻找可用用户", "过滤冲突、拉黑与低信用候选"],
-    calculate_match: ["计算匹配度", "按七项权重生成解释"],
-  };
-  const trace = (state.preview.run?.trace || []).filter((item) => item.tool && toolLabels[item.tool]);
-  const uniqueTrace = [...new Map(trace.map((item) => [item.tool, item])).values()];
-  elements.agentTrace.innerHTML = uniqueTrace
-    .map((item) => {
-      const [title, detail] = toolLabels[item.tool];
-      const count = Number.isFinite(item.result_count) ? ` · ${item.result_count} 条结果` : "";
-      return `<div class="trace-item"><strong>${escapeHtml(title)}</strong>${escapeHtml(detail + count)}</div>`;
-    })
-    .join("");
-}
-
-function renderPersonalization() {
-  const report = state.preview.personalization;
-  const notices = [];
-  if (report.applied.length) {
-    notices.push(`<div class="notice"><strong>已采用：</strong>${escapeHtml(report.applied.join("；"))}</div>`);
-  }
-  if (report.ignored_for_safety.length) {
-    notices.push(
-      `<div class="notice notice-warning"><strong>未用于排序：</strong>${escapeHtml(report.ignored_for_safety.join("；"))}</div>`,
-    );
-  }
-  if (report.unresolved.length) {
-    notices.push(
-      `<div class="notice notice-warning"><strong>暂未识别：</strong>${escapeHtml(report.unresolved.join("；"))}</div>`,
-    );
-  }
-  elements.personalizationReport.innerHTML = notices.join("");
 }
 
 function formatDate(value) {
@@ -811,10 +791,11 @@ function renderCandidates() {
 }
 
 function renderMatchResult() {
-  elements.resultSummary.textContent = state.preview.summary;
+  const candidates = state.preview.candidates || [];
+  const activityCount = candidates.filter((item) => item.candidate_type === "activity").length;
+  const userCount = candidates.filter((item) => item.candidate_type === "user").length;
+  elements.resultSummary.textContent = `找到 ${activityCount} 场活动、${userCount} 位候选搭子。请选择感兴趣的结果。`;
   setAgentModeLabel(state.preview.agent_mode, state.preview.agent_model);
-  renderAgentTrace();
-  renderPersonalization();
   renderCandidates();
   updateSelectionSummary();
 }
@@ -1357,16 +1338,46 @@ async function respondApplication(button) {
 
 async function loadNotifications() {
   if (!state.token) return;
+  const revision = ++state.notificationLoadRevision;
   try {
     const notifications = await api("/notifications");
+    if (revision !== state.notificationLoadRevision || !state.token) return;
+    const previousIds = new Set(state.notifications.map((item) => item.id));
+    state.notifications = notifications;
     const unread = notifications.filter((item) => !item.read_at).length;
     elements.notificationBadge.textContent = String(unread);
     elements.notificationBadge.classList.toggle("is-hidden", unread === 0);
     elements.notificationsList.innerHTML = notifications.length ? notifications.map((item) => `<article class="notification-item ${item.read_at ? "" : "is-unread"}">
       <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p>
-      <button type="button" class="button button-quiet" data-notification-id="${escapeHtml(item.id)}" data-notification-url="${escapeHtml(item.url)}">查看详情</button>
+      <button type="button" class="button button-quiet" data-notification-id="${escapeHtml(item.id)}" data-notification-kind="${escapeHtml(item.kind)}" data-notification-url="${escapeHtml(item.url)}">查看详情</button>
     </article>`).join("") : `<div class="empty-list">暂时没有新消息。下一次搭子动态会在这里出现。</div>`;
+    renderActivityUpdates();
+    if (notifications.some((item) => !item.read_at && !previousIds.has(item.id)
+      && item.kind === "join_application")
+      && !document.querySelector("#panel-activities").classList.contains("is-hidden")) {
+      loadActivities(true);
+    }
   } catch { /* A failed refresh must not interrupt the primary task. */ }
+}
+
+function renderActivityUpdates() {
+  if (document.querySelector("#panel-activities").classList.contains("is-hidden")) return;
+  const updates = state.notifications
+    .filter((item) => !item.read_at && ["time_vote", "join_application"].includes(item.kind))
+    .slice(0, 5);
+  const ids = updates.map((item) => item.id).join(",");
+  if (ids === state.renderedActivityUpdateIds) return;
+  state.renderedActivityUpdateIds = ids;
+  elements.activityUpdates.classList.toggle("is-hidden", !updates.length);
+  elements.activityUpdates.innerHTML = updates.map((item) => {
+    const arriving = !state.activityUpdateSeenIds.has(item.id);
+    state.activityUpdateSeenIds.add(item.id);
+    return `<article class="activity-update ${arriving ? "is-arriving" : ""}">
+      <span class="activity-update-icon" aria-hidden="true">${item.kind === "time_vote" ? "🕒" : "🙋"}</span>
+      <div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>
+      <button class="button button-quiet" type="button" data-activity-update-id="${escapeHtml(item.id)}" data-activity-update-kind="${escapeHtml(item.kind)}" data-activity-update-url="${escapeHtml(item.url)}">去看看</button>
+    </article>`;
+  }).join("");
 }
 
 function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
@@ -2101,8 +2112,16 @@ function bindEvents() {
   document.querySelector("#register-back").addEventListener("click", () => showRegisterStep("account"));
   document.querySelector("#logout-button").addEventListener("click", () => logout());
   elements.notificationButton.addEventListener("click", async () => {
-    await loadNotifications();
     elements.notificationsDialog.showModal();
+    state.notificationLoadRevision += 1;
+    elements.notificationBadge.classList.add("is-hidden");
+    try {
+      await api("/notifications/read-all", {method: "POST"});
+      await loadNotifications();
+    } catch (error) {
+      showToast(`消息已打开，但标记已读失败：${error.message}`);
+      await loadNotifications();
+    }
   });
   elements.notificationsList.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-notification-id]");
@@ -2111,14 +2130,43 @@ function bindEvents() {
     catch (error) { showToast(error.message); return; }
     elements.notificationsDialog.close();
     await loadNotifications();
-    const tab = new URL(button.dataset.notificationUrl, window.location.origin).searchParams.get("tab");
+    const target = new URL(button.dataset.notificationUrl, window.location.origin);
+    const tab = target.searchParams.get("tab");
     if (tab) switchTab(tab);
+    if (tab === "activities" && button.dataset.notificationKind === "time_vote") {
+      const activityId = target.searchParams.get("activity");
+      if (activityId) {
+        await loadActivities(true);
+        await openTimeVoteDialog(activityId);
+      }
+    }
   });
   elements.applicationsList.addEventListener("click", (event) => {
     const profileButton = event.target.closest("[data-user-profile]");
     if (profileButton) { openUserProfile(profileButton.dataset.userProfile); return; }
     const decisionButton = event.target.closest("[data-application-id]");
     if (decisionButton) respondApplication(decisionButton);
+  });
+  elements.activityUpdates.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-activity-update-id]");
+    if (!button) return;
+    try {
+      await api(`/notifications/${button.dataset.activityUpdateId}/read`, {method: "POST"});
+      await loadNotifications();
+    } catch (error) { showToast(error.message); }
+    const activityId = new URL(button.dataset.activityUpdateUrl, window.location.origin)
+      .searchParams.get("activity");
+    if (button.dataset.activityUpdateKind === "time_vote" && activityId) {
+      if (!state.activities.some((item) => item.activity.id === activityId)) {
+        await loadActivities(true);
+      }
+      await openTimeVoteDialog(activityId);
+    } else if (button.dataset.activityUpdateKind === "join_application"
+      && !elements.applicationsSection.classList.contains("is-hidden")) {
+      elements.applicationsSection.scrollIntoView({behavior: "smooth", block: "start"});
+    } else {
+      elements.activityList.scrollIntoView({behavior: "smooth", block: "start"});
+    }
   });
   document.querySelector("#enable-push-button").addEventListener("click", enablePush);
   document.addEventListener("visibilitychange", () => {
