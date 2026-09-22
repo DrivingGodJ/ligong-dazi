@@ -24,7 +24,7 @@ from app.models import Activity, User
 TOOL_CATALOG = [
     {
         "name": "search_activities",
-        "description": "查询时间、活动类型和地点相符且仍有名额的已有搭子局",
+        "description": "查询同类且仍有名额的已有搭子局，开始时间允许相差最多两小时",
         "effect": "read",
         "requires_confirmation": False,
     },
@@ -114,7 +114,10 @@ LLM_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_activities",
-            "description": "查询与本次需求时间重叠、同活动类型且仍有名额的已有活动。",
+            "description": (
+                "查询同类型且有名额的活动；开始时间允许前后两小时偏差，"
+                "须向用户说明实际活动时间。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 20}},
@@ -375,6 +378,7 @@ class OpenAICompatibleMatchingAgent:
                     "你是校园搭子匹配 Agent。先调用查询工具，再调用 calculate_match。"
                     "只能使用工具实际返回的候选，不得编造用户。预览阶段禁止任何写操作。"
                     "服务端评分是最终安全基线，你可以在候选中重新排序。"
+                    "邻近时段活动仅作备选，须说明其真实开始、结束时间；地点为空仍可搜索，但新建活动前须填写地点。"
                     "最后仅输出 JSON：summary、recommended_user_ids、recommended_activity_ids。"
                 ),
             },

@@ -1466,7 +1466,7 @@ async def confirm_match(
         activity = await session.scalar(
             select(Activity).where(Activity.id == payload.existing_activity_id).with_for_update()
         )
-        if activity is None or activity.status != "open":
+        if activity is None or activity.status != "open" or activity.starts_at <= utcnow():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动已不可加入")
         join_block_reason = await activity_join_block_reason(session, activity, current_user)
         if join_block_reason:
@@ -1495,6 +1495,12 @@ async def confirm_match(
         invitations: list[Invitation] = []
         write_tools = ["join_activity", "schedule_reminder"]
     else:
+        location = match_request.location.strip() or payload.location or ""
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="创建活动前请填写地点；也可以选择加入已有活动。",
+            )
         selected_ids = set(payload.candidate_user_ids)
         if match_request.same_gender_only:
             if current_user.gender not in {"male", "female"}:
@@ -1521,17 +1527,18 @@ async def confirm_match(
             )
         activity = Activity(
             owner_id=current_user.id,
-            title=match_request.title or f"{match_request.location}{match_request.category}搭子局",
+            title=match_request.title or f"{location}{match_request.category}搭子局",
             category=match_request.category,
             starts_at=match_request.starts_at,
             ends_at=match_request.ends_at,
-            location=match_request.location,
+            location=location,
             capacity=match_request.people_needed + 1,
             personal_requirement=match_request.personal_requirement,
             same_gender_only=match_request.same_gender_only,
             status="open",
         )
         session.add(activity)
+        match_request.location = location
         await session.flush()
         session.add(
             ActivityMember(

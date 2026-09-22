@@ -53,6 +53,10 @@ const elements = {
   candidateList: document.querySelector("#candidate-list"),
   confirmBar: document.querySelector("#confirm-bar"),
   selectionSummary: document.querySelector("#selection-summary"),
+  selectionNote: document.querySelector("#selection-note"),
+  confirmLocationField: document.querySelector("#confirm-location-field"),
+  confirmLocation: document.querySelector("#confirm-location"),
+  confirmLocationError: document.querySelector("#confirm-location-error"),
   confirmButton: document.querySelector("#confirm-match-button"),
   successTitle: document.querySelector("#success-title"),
   successCopy: document.querySelector("#success-copy"),
@@ -263,6 +267,7 @@ function showAuthenticatedShell() {
   elements.accountArea.classList.remove("is-hidden");
   elements.accountName.textContent = state.user.display_name;
   populateProfileForm();
+  updatePeopleNeededOutput();
   loadInvitations(true);
   loadActivities(true);
 }
@@ -429,8 +434,33 @@ function finishRunningProgress() {
 }
 
 function getCategory(form) {
-  const custom = String(form.get("custom_category") || "").trim();
-  return custom || form.get("category");
+  const selected = String(form.get("category") || "");
+  return selected === "__custom__"
+    ? String(form.get("custom_category") || "").trim()
+    : selected;
+}
+
+function syncCategoryChoice() {
+  const customSelected = elements.matchForm.elements.category.value === "__custom__";
+  const field = document.querySelector(".other-category-input");
+  field.classList.toggle("is-hidden", !customSelected);
+  elements.matchForm.elements.custom_category.required = customSelected;
+}
+
+function updatePeopleNeededOutput() {
+  const count = Number(elements.matchForm.elements.people_needed.value);
+  document.querySelector("#people-needed-output").textContent = `${count} 人`;
+  const total = count + 1;
+  const hint = document.querySelector("#people-needed-hint");
+  if (state.user) {
+    const min = state.user.preferred_group_min;
+    const max = state.user.preferred_group_max;
+    const fit = min <= total && total <= max;
+    hint.textContent = `共 ${total} 人（含你）· 画像偏好 ${min}—${max} 人${fit ? "，刚好符合" : "，这次可以灵活调整"}`;
+  } else {
+    hint.textContent = `共 ${total} 人（含你），最多再找 9 位搭子`;
+  }
+  elements.matchForm.elements.people_needed.setAttribute("aria-valuetext", `还需要 ${count} 人`);
 }
 
 function clearMatchRequestAfterAgentError() {
@@ -445,9 +475,11 @@ function clearMatchRequestAfterAgentError() {
   elements.matchForm.elements.custom_category.value = "";
   elements.matchForm.elements.location.value = "";
   elements.matchForm.elements.people_needed.value = "2";
+  updatePeopleNeededOutput();
   elements.matchForm.elements.title.value = "";
   elements.matchForm.elements.personal_requirement.value = "";
   elements.matchForm.elements.same_gender_only.checked = false;
+  syncCategoryChoice();
   initializeDates();
   setResultView("empty");
   elements.matchForm.querySelector("input[name='category']")?.focus();
@@ -455,6 +487,14 @@ function clearMatchRequestAfterAgentError() {
 
 async function handleMatch(event) {
   event.preventDefault();
+  const form = new FormData(elements.matchForm);
+  if (!getCategory(form)) {
+    showInlineError(elements.matchError, "先选择活动类型；选“其他活动”后还需要写下名称。");
+    (form.get("category") === "__custom__"
+      ? elements.matchForm.elements.custom_category
+      : elements.matchForm.querySelector("input[name='category']"))?.focus();
+    return;
+  }
   state.preview = null;
   loadAgentMode();
   hideInlineError(elements.matchError);
@@ -463,7 +503,6 @@ async function handleMatch(event) {
   setResultView("running");
   startRunningProgress();
   setButtonLoading(elements.matchSubmit, true, "Agent 正在匹配…");
-  const form = new FormData(elements.matchForm);
   const payload = {
     category: getCategory(form),
     starts_at: new Date(form.get("starts_at")).toISOString(),
@@ -481,7 +520,16 @@ async function handleMatch(event) {
     });
     const run = await api(`/agent-runs/${preview.agent_run_id}`).catch(() => null);
     finishRunningProgress();
-    state.preview = { ...preview, requestedCount: payload.people_needed, run };
+    state.preview = {
+      ...preview,
+      requestedCount: payload.people_needed,
+      requestedLocation: payload.location,
+      requestedStartsAt: payload.starts_at,
+      requestedEndsAt: payload.ends_at,
+      run,
+    };
+    elements.confirmLocation.value = "";
+    elements.confirmLocationError.classList.add("is-hidden");
     renderMatchResult();
     window.setTimeout(() => setResultView("content"), 180);
   } catch (error) {
@@ -500,7 +548,7 @@ async function handleMatch(event) {
 
 function renderAgentTrace() {
   const toolLabels = {
-    search_activities: ["查询已有活动", "检查同类活动与空余名额"],
+    search_activities: ["查询已有活动", "检查同类活动、邻近时段与空余名额"],
     search_users: ["寻找可用用户", "过滤冲突、拉黑与低信用候选"],
     calculate_match: ["计算匹配度", "按七项权重生成解释"],
   };
@@ -593,8 +641,14 @@ function activityCandidateCopy(candidate) {
   return {
     title: activity.title,
     kind: "已有活动",
-    meta: `${formatDate(activity.starts_at)} · ${activity.location} · ${activity.participant_count}/${activity.capacity} 人`,
+    meta: `${formatDate(activity.starts_at)} 至 ${formatDate(activity.ends_at)} · ${activity.location} · ${activity.participant_count}/${activity.capacity} 人`,
   };
+}
+
+function activityTimeDiffers(activity) {
+  if (!activity || !state.preview) return false;
+  return Math.abs(new Date(activity.starts_at) - new Date(state.preview.requestedStartsAt)) >= 60_000
+    || Math.abs(new Date(activity.ends_at) - new Date(state.preview.requestedEndsAt)) >= 60_000;
 }
 
 function renderCandidates() {
@@ -629,6 +683,8 @@ function renderCandidates() {
         : "";
       const genderRule = candidate.activity?.same_gender_only
         ? `<span class="same-gender-tag">仅同性加入</span>` : "";
+      const timeNote = activityTimeDiffers(candidate.activity)
+        ? `<div class="candidate-time-note">时间与你填写的不完全一致，请核对实际时段</div>` : "";
       return `
         <article class="candidate-card" data-type="${candidate.candidate_type}" data-id="${escapeHtml(candidate.candidate_id)}">
           <input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" aria-label="选择${escapeHtml(copy.title)}" />
@@ -637,6 +693,7 @@ function renderCandidates() {
             <p class="candidate-meta">${escapeHtml(copy.meta)}</p>
             ${genderSummary}
             ${genderRule}
+            ${timeNote}
             <div class="candidate-reasons">${reasons}</div>
             ${skillMarks ? `<div class="candidate-system-marks">${skillMarks}</div>` : ""}
           </div>
@@ -664,16 +721,32 @@ function updateSelectionSummary() {
     card.classList.toggle("is-selected", selected);
     card.querySelector("input").checked = selected;
   });
+  const needsLocation = !state.preview.requestedLocation;
+  elements.confirmLocationField.classList.toggle("is-hidden", !needsLocation);
+  elements.confirmBar.classList.toggle("needs-location", needsLocation);
+  elements.resultContent.classList.toggle("needs-location", needsLocation);
   if (state.selectedActivity) {
+    const activity = state.preview.candidates.find(
+      (item) => item.candidate_type === "activity" && item.candidate_id === state.selectedActivity,
+    )?.activity;
     elements.selectionSummary.textContent = "已选择加入 1 个已有活动";
+    elements.selectionNote.textContent = activity
+      ? `将按现有活动的时间与地点加入：${formatDate(activity.starts_at)} 至 ${formatDate(activity.ends_at)}`
+      : "将按现有活动的实际时间和地点加入";
     elements.confirmButton.textContent = "确认加入活动";
     elements.confirmButton.disabled = false;
   } else if (state.selectedUsers.size) {
     elements.selectionSummary.textContent = `已选择 ${state.selectedUsers.size} 位搭子`;
+    elements.selectionNote.textContent = needsLocation
+      ? "邀请前先填写下方地点，活动创建后才会发出邀请"
+      : "确认后将创建活动并发出邀请";
     elements.confirmButton.textContent = "确认创建并邀请";
     elements.confirmButton.disabled = false;
   } else {
     elements.selectionSummary.textContent = "尚未选择候选";
+    elements.selectionNote.textContent = needsLocation
+      ? "可以先填地点发布活动，也可以选择上方现有活动"
+      : "没挑中也没关系，可以先发布活动等人加入";
     elements.confirmButton.textContent = "确认并执行";
     elements.confirmButton.disabled = true;
   }
@@ -716,6 +789,14 @@ async function confirmMatch(createSoloActivity = false) {
   if (!state.preview) return;
   if (!createSoloActivity && !state.selectedActivity && !state.selectedUsers.size) return;
   hideInlineError(elements.matchError);
+  const joiningExisting = !createSoloActivity && Boolean(state.selectedActivity);
+  const location = state.preview.requestedLocation || elements.confirmLocation.value.trim();
+  if (!joiningExisting && !location) {
+    elements.confirmLocationError.classList.remove("is-hidden");
+    elements.confirmLocation.focus();
+    return;
+  }
+  elements.confirmLocationError.classList.add("is-hidden");
   const actionButton = createSoloActivity
     ? document.querySelector("#create-solo-button")
     : elements.confirmButton;
@@ -727,6 +808,7 @@ async function confirmMatch(createSoloActivity = false) {
         candidate_user_ids: createSoloActivity ? [] : [...state.selectedUsers],
         existing_activity_id: createSoloActivity ? null : state.selectedActivity,
         create_solo_activity: createSoloActivity,
+        location: joiningExisting ? null : location,
       }),
     });
     elements.successTitle.textContent =
@@ -1713,6 +1795,7 @@ async function flushProfileSave() {
     elements.profileCredit.textContent = String(state.user.credit_score);
     renderSkillMarks(state.user.skill_marks || []);
     syncSameGenderChoice();
+    updatePeopleNeededOutput();
     elements.profileStatus.textContent = "画像已自动保存";
   } catch (error) {
     if (state.token === token) {
@@ -1780,6 +1863,11 @@ function bindEvents() {
   });
 
   elements.matchForm.addEventListener("submit", handleMatch);
+  elements.matchForm.querySelector("#category-choices").addEventListener("change", syncCategoryChoice);
+  elements.matchForm.elements.people_needed.addEventListener("input", updatePeopleNeededOutput);
+  elements.confirmLocation.addEventListener("input", () => {
+    if (elements.confirmLocation.value.trim()) elements.confirmLocationError.classList.add("is-hidden");
+  });
   document.querySelector("#new-match-button").addEventListener("click", resetMatchResult);
   document.querySelector("#start-another-button").addEventListener("click", resetMatchResult);
   elements.candidateList.addEventListener("click", handleCandidateSelection);
@@ -1891,18 +1979,8 @@ function bindEvents() {
     });
   });
 
-  document.querySelector("input[name='custom_category']").addEventListener("input", (event) => {
-    if (event.target.value.trim()) {
-      document.querySelectorAll("input[name='category']").forEach((input) => {
-        input.checked = false;
-      });
-    }
-  });
-  document.querySelectorAll("input[name='category']").forEach((input) => {
-    input.addEventListener("change", () => {
-      document.querySelector("input[name='custom_category']").value = "";
-    });
-  });
+  syncCategoryChoice();
+  updatePeopleNeededOutput();
 }
 
 async function initialize() {

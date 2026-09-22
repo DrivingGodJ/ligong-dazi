@@ -11,8 +11,8 @@
     <meta name="theme-color" content="#14111b" media="(prefers-color-scheme: dark)" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=12" />
-    <script src="/static/app.js?v=12" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=13" />
+    <script src="/static/app.js?v=13" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -57,7 +57,7 @@
           <p class="eyebrow">校园生活，不必总是单打独斗</p>
           <h1 id="auth-title">今天想做什么？搭子这就来</h1>
           <p>
-            运动、吃饭、学习或看电影，把时间地点告诉 Agent。它负责认真筛选，你负责挑一个看对眼的安排。
+            运动、吃饭、学习或看电影，先告诉 Agent 你想做什么、什么时候有空。地点可以确定后再填。
           </p>
           <ol class="auth-steps" aria-label="使用流程">
             <li><span>1</span>先用画像告诉我们“你是哪一挂”</li>
@@ -261,11 +261,12 @@
                     <label class="choice-chip"><input type="radio" name="category" value="自习" /><span>自习</span></label>
                     <label class="choice-chip"><input type="radio" name="category" value="吃饭" /><span>吃饭</span></label>
                     <label class="choice-chip"><input type="radio" name="category" value="电影" /><span>电影</span></label>
+                    <label class="choice-chip"><input type="radio" name="category" value="__custom__" /><span>其他活动</span></label>
+                    <label class="other-category-input is-hidden" for="custom-category">
+                      写下活动类型
+                      <input id="custom-category" name="custom_category" type="text" maxlength="50" placeholder="例如：骑行" />
+                    </label>
                   </div>
-                  <label class="other-category">
-                    其他活动
-                    <input name="custom_category" type="text" maxlength="50" placeholder="例如：骑行" />
-                  </label>
                 </fieldset>
 
                 <div class="form-section two-columns">
@@ -281,18 +282,14 @@
 
                 <div class="form-section two-columns location-people">
                   <label>
-                    地点
-                    <input name="location" type="text" maxlength="160" value="南区体育馆" required />
+                    地点（选填）
+                    <input name="location" type="text" maxlength="160" placeholder="可先不填，创建活动前再确定" />
+                    <span class="field-help">不填也能找搭子、浏览现有活动；新建活动前需要确定地点。</span>
                   </label>
-                  <label>
-                    还需要几人
-                    <select name="people_needed">
-                      <option value="1">1 人</option>
-                      <option value="2" selected>2 人</option>
-                      <option value="3">3 人</option>
-                      <option value="4">4 人</option>
-                      <option value="5">5 人</option>
-                    </select>
+                  <label class="level-control" for="people-needed-slider">
+                    <span>还需要几人 <output id="people-needed-output" for="people-needed-slider">2 人</output></span>
+                    <input id="people-needed-slider" name="people_needed" type="range" min="1" max="9" value="2" />
+                    <small id="people-needed-hint" class="field-help">你也算一人，最多再找 9 位搭子。</small>
                   </label>
                 </div>
 
@@ -366,8 +363,14 @@
                 <div id="confirm-bar" class="confirm-bar is-hidden">
                   <div>
                     <strong id="selection-summary">尚未选择候选</strong>
-                    <span>没挑中也没关系，可以先发布活动等人加入</span>
+                    <span id="selection-note">没挑中也没关系，可以先发布活动等人加入</span>
                   </div>
+                  <label id="confirm-location-field" class="confirmation-location is-hidden" for="confirm-location">
+                    创建活动的地点（加入已有活动可不填）
+                    <input id="confirm-location" type="text" maxlength="160" placeholder="例如：江阴体育馆" />
+                    <small>也可以选择一个现有活动，按它的实际地点和时间加入。</small>
+                    <small id="confirm-location-error" class="confirmation-error is-hidden" role="alert">先填写地点再创建活动；或选择加入现有活动。</small>
+                  </label>
                   <div class="confirm-actions">
                     <button id="create-solo-button" class="button button-quiet" type="button">先发布，等人加入</button>
                     <button id="confirm-match-button" class="button button-accent" type="button">确认并执行</button>

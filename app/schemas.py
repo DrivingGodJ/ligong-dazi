@@ -222,6 +222,14 @@ class ActivityCreate(ApiModel):
     personal_requirement: str | None = Field(default=None, max_length=500)
     same_gender_only: bool = False
 
+    @field_validator("location")
+    @classmethod
+    def require_location(cls, value: str) -> str:
+        location = value.strip()
+        if not location:
+            raise ValueError("创建活动前请填写地点")
+        return location
+
     @field_validator("starts_at", "ends_at")
     @classmethod
     def require_timezone(cls, value: datetime) -> datetime:
@@ -259,11 +267,16 @@ class MatchPreviewRequest(ApiModel):
     category: str = Field(min_length=1, max_length=50)
     starts_at: datetime
     ends_at: datetime
-    location: str = Field(min_length=1, max_length=160)
-    people_needed: int = Field(ge=1, le=20)
+    location: str = Field(default="", max_length=160)
+    people_needed: int = Field(ge=1, le=9)
     title: str | None = Field(default=None, max_length=120)
     personal_requirement: str | None = Field(default=None, max_length=500)
     same_gender_only: bool = False
+
+    @field_validator("location", mode="before")
+    @classmethod
+    def clean_location(cls, value: str | None) -> str:
+        return value.strip() if value is not None else ""
 
     @field_validator("starts_at", "ends_at")
     @classmethod
@@ -313,6 +326,12 @@ class MatchConfirmRequest(ApiModel):
     candidate_user_ids: list[str] = Field(default_factory=list, max_length=20)
     existing_activity_id: str | None = None
     create_solo_activity: bool = False
+    location: str | None = Field(default=None, max_length=160)
+
+    @field_validator("location")
+    @classmethod
+    def clean_location(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
 
     @model_validator(mode="after")
     def validate_selection(self) -> MatchConfirmRequest:

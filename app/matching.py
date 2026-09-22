@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, ActivityMember, User, UserBlock
+from app.models import Activity, ActivityMember, User, UserBlock, utcnow
+
+ACTIVITY_START_TOLERANCE = timedelta(hours=2)
 
 MATCH_WEIGHTS = {
     "time": 0.30,
@@ -193,10 +195,17 @@ async def search_open_activities(
         .outerjoin(member_count, member_count.c.activity_id == Activity.id)
         .where(
             Activity.owner_id != context.requester.id,
+            Activity.id.not_in(
+                select(ActivityMember.activity_id).where(
+                    ActivityMember.user_id == context.requester.id,
+                    ActivityMember.status == "confirmed",
+                )
+            ),
             Activity.status == "open",
             Activity.category == context.category,
-            Activity.starts_at < context.ends_at,
-            Activity.ends_at > context.starts_at,
+            Activity.starts_at > utcnow(),
+            Activity.starts_at >= context.starts_at - ACTIVITY_START_TOLERANCE,
+            Activity.starts_at <= context.starts_at + ACTIVITY_START_TOLERANCE,
             (Activity.capacity - func.coalesce(member_count.c.member_count, 0)) >= 1,
             or_(
                 Activity.same_gender_only.is_(False),
@@ -205,10 +214,15 @@ async def search_open_activities(
                 ),
             ),
         )
-        .order_by(Activity.starts_at.asc())
-        .limit(max(1, min(limit, 50)))
     )
-    return [(row[0], int(row[1])) for row in (await session.execute(statement)).all()]
+    rows = [(row[0], int(row[1])) for row in (await session.execute(statement)).all()]
+    rows.sort(
+        key=lambda row: (
+            abs((row[0].starts_at - context.starts_at).total_seconds()),
+            row[0].starts_at,
+        )
+    )
+    return rows[: max(1, min(limit, 50))]
 
 
 async def search_available_users(
@@ -299,6 +313,8 @@ def score_user_candidate(
         location_match_score(context.location, item) for item in candidate.preferred_locations
     ]
     location_score = max(preferred_location_scores, default=50.0)
+    if not context.location:
+        location_score = 65.0
     if candidate.campus and normalize(candidate.campus) in normalize(context.location):
         location_score = max(location_score, 75.0)
 
@@ -372,7 +388,7 @@ def score_user_candidate(
     explanation = [
         "活动时间无冲突",
         f"活动偏好 {int(activity_score)} 分",
-        f"地点偏好 {int(location_score)} 分",
+        f"地点偏好 {int(location_score)} 分" if context.location else "尚未指定活动地点",
         f"信用分 {candidate.credit_score}",
     ]
     if personalization.same_department and candidate.department == context.requester.department:
@@ -415,8 +431,26 @@ def score_activity_candidate(
         ).total_seconds(),
     )
     request_seconds = max(1.0, (context.ends_at - context.starts_at).total_seconds())
-    time_score = min(100.0, overlap_seconds / request_seconds * 100.0)
-    location_score = location_match_score(context.location, activity.location)
+    start_shift = (activity.starts_at - context.starts_at).total_seconds()
+    start_shift_minutes = round(abs(start_shift) / 60)
+    if overlap_seconds:
+        time_score = max(
+            0.0,
+            40.0 + 60.0 * overlap_seconds / request_seconds
+            - min(20.0, abs(start_shift) / 360),
+        )
+    else:
+        gap_seconds = max(
+            (activity.starts_at - context.ends_at).total_seconds(),
+            (context.starts_at - activity.ends_at).total_seconds(),
+            0.0,
+        )
+        time_score = max(10.0, 40.0 - gap_seconds / 240)
+    time_score = min(100.0, time_score)
+    location_score = (
+        location_match_score(context.location, activity.location)
+        if context.location else 65.0
+    )
     available_slots = activity.capacity - member_count
     capacity_score = 100.0 if available_slots >= context.people_needed else 70.0
     score = time_score * 0.35 + 100.0 * 0.30 + location_score * 0.20 + capacity_score * 0.15
@@ -426,6 +460,16 @@ def score_activity_candidate(
         "location": round(location_score, 1),
         "capacity": capacity_score,
     }
+    if start_shift_minutes:
+        direction = "早" if start_shift < 0 else "晚"
+        time_explanation = (
+            f"开始时间比你填写的{direction} {start_shift_minutes} 分钟，"
+            "请核对实际时间"
+        )
+    elif activity.ends_at != context.ends_at:
+        time_explanation = "结束时间与你填写的不同，请核对实际时间"
+    else:
+        time_explanation = "活动时间与你填写的一致"
     return ScoredCandidate(
         candidate_type="activity",
         candidate_id=activity.id,
@@ -433,8 +477,8 @@ def score_activity_candidate(
         factors=factors,
         explanation=[
             "已有同类活动可直接加入",
-            f"时间重合度 {int(time_score)} 分",
-            f"地点相近度 {int(location_score)} 分",
+            time_explanation,
+            f"地点相近度 {int(location_score)} 分" if context.location else "可参考现有活动地点",
             f"当前还有 {available_slots} 个名额",
         ],
     )

@@ -52,6 +52,7 @@
 html {
   min-width: 320px;
   background: var(--canvas);
+  scroll-padding-top: 9rem;
 }
 
 body {
@@ -843,12 +844,14 @@ a:focus-visible {
   border-color: #cbb9f6;
 }
 
-.other-category {
-  margin-top: 0.7rem;
-  font-size: 0.78rem;
+.other-category-input {
+  grid-column: 1 / -1;
+  margin-top: 0.1rem;
+  font-size: 0.82rem;
 }
 
-.other-category input {
+.other-category-input input {
+  margin-top: 0.4rem;
   min-height: 42px;
 }
 
@@ -859,7 +862,15 @@ a:focus-visible {
 }
 
 .location-people {
-  grid-template-columns: 1.45fr 0.55fr;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+}
+
+#result-content {
+  padding-bottom: 10rem;
+}
+
+#result-content.needs-location {
+  padding-bottom: 16rem;
 }
 
 .empty-state,
@@ -1182,6 +1193,47 @@ a:focus-visible {
   margin-top: 0.1rem;
   color: #cec4d9;
   font-size: 0.75rem;
+}
+
+.confirm-bar.needs-location {
+  flex-wrap: wrap;
+}
+
+.confirmation-location {
+  width: 100%;
+  color: #fff;
+  font-size: 0.83rem;
+  font-weight: 700;
+}
+
+.confirmation-location input {
+  margin-top: 0.35rem;
+  color: var(--ink-950);
+  background: #fff;
+}
+
+.confirmation-location small {
+  display: block;
+  margin-top: 0.3rem;
+  color: #cec4d9;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.confirmation-location .confirmation-error {
+  color: #ffd6d6;
+  font-weight: 750;
+}
+
+.candidate-time-note {
+  width: fit-content;
+  margin-top: 0.55rem;
+  padding: 0.3rem 0.55rem;
+  color: var(--warning-800);
+  background: var(--warning-100);
+  border-radius: 8px;
+  font-size: 0.73rem;
+  font-weight: 750;
 }
 
 .confirm-actions {
@@ -2697,8 +2749,12 @@ a:focus-visible {
     flex-direction: column;
   }
 
+  #result-content.needs-location {
+    padding-bottom: 22rem;
+  }
+
   .confirm-bar span {
-    display: none;
+    display: block;
   }
 
   .confirm-actions {
