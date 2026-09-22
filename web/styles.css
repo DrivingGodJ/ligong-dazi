@@ -76,11 +76,19 @@ body > .main-nav .nav-badge { position: absolute; top: 0; right: 7%; transform: 
 .notification-item { padding: 0.8rem; border-bottom: 1px solid var(--line); }
 .notification-item.is-unread { border-left: 3px solid var(--brand-600); }
 .notification-item p { margin: 0.3rem 0; }
+.legacy-student-id { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 360px); gap: 1rem; padding: clamp(1rem, 3vw, 1.5rem); margin: 1rem 0; border: 1px solid var(--brand-500); border-radius: 16px; background: var(--brand-50); }
+.legacy-student-id h2 { margin: 0.15rem 0 0.4rem; font-size: 1.15rem; }
+.legacy-student-id p { margin: 0; color: var(--ink-700); line-height: 1.5; }
+.claim-student-id-form { display: grid; gap: 0.6rem; align-content: center; }
+.claim-student-id-form .form-error { margin: 0; }
+#auth-appeal-button { margin-top: 0.5rem; }
+#student-appeal-status.is-success { color: var(--success-700); background: var(--success-100); border-color: var(--success-700); }
 @media (max-width: 660px) {
   .app-header:not(.admin-header) { grid-template-columns: 1fr auto; }
   .app-header:not(.admin-header) .account-area { display: block; }
   .app-header:not(.admin-header) .account-name { display: none; }
   body > .main-nav { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .legacy-student-id { grid-template-columns: 1fr; }
 }
 
 * {

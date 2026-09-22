@@ -58,6 +58,7 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
         "/api/v1/auth/register",
         json={
             "email": "owner@njust.edu.cn",
+            "student_id": me.json()["student_id"],
             "password": "test-password-123",
             "display_name": "重复用户",
             "campus": "南京",
@@ -332,6 +333,7 @@ async def test_guided_registration_solo_activity_and_timed_leave(
         "/api/v1/auth/register",
         json={
             "email": "guided@njust.edu.cn",
+            "student_id": "202600000001",
             "password": "test-password-123",
             "display_name": "画像用户",
             "university": "南京理工大学",
@@ -375,6 +377,7 @@ async def test_guided_registration_solo_activity_and_timed_leave(
         "/api/v1/auth/register",
         json={
             "email": "invalid-gender@njust.edu.cn",
+            "student_id": "202600000002",
             "password": "test-password-123",
             "display_name": "无效性别",
             "gender": "other",

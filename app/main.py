@@ -25,7 +25,12 @@ from app.migrations import (
     migrate_user_campuses,
 )
 from app.models import Base
-from app.notifications import dispatch_push, enqueue_activity_reminders, ensure_push_key
+from app.notifications import (
+    dispatch_push,
+    enqueue_activity_reminders,
+    enqueue_legacy_student_id_notices,
+    ensure_push_key,
+)
 from app.post_activity import process_completed_activities
 
 logger = logging.getLogger(__name__)
@@ -81,6 +86,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if migrated_campuses:
                 logger.info("已将 %s 位用户的旧校区资料归一为南京或江阴", migrated_campuses)
             await migrate_activity_campuses(session)
+            await enqueue_legacy_student_id_notices(session)
             await process_completed_activities(session)
             await cleanup_expired_activity_photos(session)
             await enqueue_activity_reminders(session)
@@ -103,6 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = app_settings
     app.state.admin_config_lock = asyncio.Lock()
     app.state.admin_login_attempts = {}
+    app.state.appeal_attempts = {}
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.cors_origins,

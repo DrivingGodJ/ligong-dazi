@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -50,6 +51,7 @@ from app.models import (
     PeerFeedbackReview,
     PushSubscription,
     Reminder,
+    StudentIdAppeal,
     SystemEvent,
     User,
     UserBlock,
@@ -103,6 +105,7 @@ from app.schemas import (
     ProfileSummaryResponse,
     PushSubscriptionRequest,
     RegisterRequest,
+    StudentIdAppealCreate,
     TokenResponse,
     ToolDefinition,
     UserMe,
@@ -175,6 +178,8 @@ def user_public(user: User) -> UserPublic:
 def user_me(user: User) -> UserMe:
     values = {field: getattr(user, field) for field in UserMe.model_fields}
     values["gender"] = normalized_gender(user.gender)
+    if user.email.endswith("@accounts.invalid"):
+        values["email"] = None
     return UserMe.model_validate(values)
 
 
@@ -467,11 +472,22 @@ async def register(
 ) -> TokenResponse:
     if payload.campus not in {"南京", "江阴"}:
         raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
-    email = payload.email.lower()
-    if await session.scalar(select(User.id).where(User.email == email)):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已注册")
+    if await session.scalar(select(User.id).where(User.student_id == payload.student_id)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "student_id_taken",
+                "message": "这个学号已被使用，可以留下联系方式申诉",
+            },
+        )
+    # The existing SQLite email column is NOT NULL. Keep it internally for old accounts,
+    # and use a non-deliverable value for new student-ID-only accounts until a full migration.
+    email = str(payload.email).lower() if payload.email else f"no-email-{new_id()}@accounts.invalid"
+    if payload.email and await session.scalar(select(User.id).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="该邮箱已注册；旧账号请直接登录")
     user = User(
         email=email,
+        student_id=payload.student_id,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name.strip(),
         university=payload.university.strip(),
@@ -488,16 +504,68 @@ async def register(
         preferred_group_max=payload.preferred_group_max,
     )
     session.add(user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "student_id_taken",
+                "message": "这个学号已被使用，可以留下联系方式申诉",
+            },
+        ) from exc
     token, expires_at = create_access_token(user.id, settings)
     return TokenResponse(access_token=token, expires_at=expires_at)
 
 
+@router.post("/auth/student-id-appeals", status_code=201)
+async def create_student_id_appeal(
+    payload: StudentIdAppealCreate,
+    request: Request,
+    session: SessionDep,
+) -> dict[str, str]:
+    if not await session.scalar(select(User.id).where(User.student_id == payload.student_id)):
+        raise HTTPException(status_code=409, detail="这个学号目前没有被使用，请返回注册页面重试")
+    client_host = request.client.host if request.client else "unknown"
+    attempts: dict[str, list[float]] = request.app.state.appeal_attempts
+    now = time.monotonic()
+    recent = [stamp for stamp in attempts.get(client_host, []) if now - stamp < 3600]
+    if len(recent) >= 30:
+        raise HTTPException(status_code=429, detail="申诉提交较频繁，请稍后再试")
+    recent.append(now)
+    attempts[client_host] = recent
+    existing = await session.scalar(
+        select(StudentIdAppeal.id).where(
+            StudentIdAppeal.student_id == payload.student_id,
+            StudentIdAppeal.contact == payload.contact,
+            StudentIdAppeal.status == "pending",
+        )
+    )
+    if existing is None:
+        session.add(
+            StudentIdAppeal(
+                student_id=payload.student_id,
+                contact=payload.contact,
+                description=payload.description.strip() if payload.description else None,
+            )
+        )
+        await session.commit()
+    return {"message": "申诉已收到，管理员核查后会通过你留下的方式联系。请勿重复提交。"}
+
+
 @router.post("/auth/token", response_model=TokenResponse)
 async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDep) -> TokenResponse:
-    user = await session.scalar(select(User).where(User.email == payload.email.lower()))
+    account = (payload.account or str(payload.email)).strip()
+    user = await session.scalar(
+        select(User).where(
+            User.email == account.lower() if "@" in account else User.student_id == account.upper()
+        )
+    )
     if user is None or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="学号、旧邮箱或密码错误"
+        )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已停用")
     token, expires_at = create_access_token(user.id, settings)
@@ -516,6 +584,23 @@ async def update_me(
     session: SessionDep,
 ) -> UserMe:
     values = payload.model_dump(exclude_unset=True)
+    if "student_id" in values:
+        student_id = values["student_id"]
+        if student_id is None:
+            raise HTTPException(status_code=422, detail="学号不能为空")
+        if current_user.student_id and current_user.student_id != student_id:
+            raise HTTPException(status_code=409, detail="学号已绑定；如需更正请联系管理员")
+        occupied = await session.scalar(
+            select(User.id).where(User.student_id == student_id, User.id != current_user.id)
+        )
+        if occupied:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "student_id_taken",
+                    "message": "这个学号已被使用，可以留下联系方式申诉",
+                },
+            )
     if "campus" in values and values["campus"] not in {"南京", "江阴"}:
         raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
     min_group = values.get("preferred_group_min", current_user.preferred_group_min)
@@ -538,7 +623,17 @@ async def update_me(
     if "hobby_skills" in values:
         await session.flush()
         await refresh_hidden_profile(session, current_user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "student_id_taken",
+                "message": "这个学号已被使用，可以留下联系方式申诉",
+            },
+        ) from exc
     await session.refresh(current_user)
     return user_me(current_user)
 

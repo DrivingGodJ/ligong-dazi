@@ -13,8 +13,8 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icon-192.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=14" />
-    <script src="/static/app.js?v=14" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=15" />
+    <script src="/static/app.js?v=15" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -82,8 +82,9 @@
           <div id="login-panel" role="tabpanel" aria-labelledby="login-tab">
             <form id="login-form" class="form-stack">
               <label>
-                邮箱
-                <input name="email" type="email" autocomplete="email" required />
+                学号或旧账号邮箱
+                <input name="account" type="text" inputmode="text" autocomplete="username" maxlength="320" required />
+                <span class="field-help">以前用邮箱注册的同学仍可用原邮箱登录，进入后补填学号。</span>
               </label>
               <label>
                 密码
@@ -136,8 +137,9 @@
                   <input name="display_name" type="text" autocomplete="nickname" maxlength="80" placeholder="例如：小曾" required />
                 </label>
                 <label>
-                  邮箱
-                  <input name="email" type="email" autocomplete="email" required />
+                  学号
+                  <input name="student_id" type="text" inputmode="numeric" autocomplete="username" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" placeholder="请输入你的学号" required />
+                  <span class="field-help">6–24 位字母或数字，不向其他用户展示；目前仅用于账号识别，尚不代表学籍认证。</span>
                 </label>
                 <label>
                   密码
@@ -225,12 +227,13 @@
                 </fieldset>
                 <div class="register-actions">
                   <button id="register-back" class="button button-quiet" type="button">上一步</button>
-                  <button class="button button-primary" type="submit">完成注册，去找搭子</button>
+                  <button class="button button-primary" type="submit">完成注册，逛活动广场</button>
                 </div>
               </div>
             </form>
           </div>
           <p id="auth-error" class="form-error is-hidden" role="alert"></p>
+          <button id="auth-appeal-button" class="button button-quiet is-hidden" type="button">学号是我的，提交申诉</button>
         </div>
       </section>
 
@@ -487,6 +490,22 @@
             </div>
           </div>
 
+          <section id="legacy-student-id" class="legacy-student-id is-hidden" aria-labelledby="legacy-student-heading">
+            <div>
+              <p class="eyebrow">旧账号升级</p>
+              <h2 id="legacy-student-heading">补填学号，之后登录更方便</h2>
+              <p>旧邮箱和密码仍然能登录。学号只用于账号识别，不会展示给其他同学；补填后学号不能自行修改。</p>
+            </div>
+            <form id="claim-student-id-form" class="claim-student-id-form">
+              <label>我的学号
+                <input name="student_id" type="text" inputmode="numeric" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" required />
+              </label>
+              <button class="button button-primary" type="submit">绑定学号</button>
+              <p id="claim-student-id-error" class="form-error is-hidden" role="alert"></p>
+              <button id="claim-appeal-button" class="button button-quiet is-hidden" type="button">学号是我的，提交申诉</button>
+            </form>
+          </section>
+
           <section class="ai-summary-card" aria-labelledby="ai-summary-heading">
             <div>
               <p class="eyebrow">换个角度认识自己</p>
@@ -605,6 +624,22 @@
       <button class="nav-button" type="button" data-tab="activities"><span aria-hidden="true">◷</span>我的活动<span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span></button>
       <button class="nav-button" type="button" data-tab="profile"><span aria-hidden="true">☺</span>我的画像</button>
     </nav>
+
+    <dialog id="student-appeal-dialog" class="modal-card">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="student-appeal-dialog" aria-label="关闭申诉">×</button>
+        <p class="eyebrow">学号申诉</p>
+        <h2>这个学号已经被使用？</h2>
+        <p class="modal-copy">如果这确实是你的学号，请留下能联系到你的方式。管理员会人工核查；提交不会自动改动别人的账号。</p>
+        <form id="student-appeal-form" class="form-stack">
+          <label>申诉学号<input name="student_id" type="text" readonly required /></label>
+          <label>联系方式（必填）<input name="contact" type="text" maxlength="160" minlength="5" placeholder="微信、QQ、手机号或邮箱" autocomplete="off" required /></label>
+          <label>补充说明（选填）<textarea name="description" rows="3" maxlength="500" placeholder="例如：什么时候发现学号被占用"></textarea></label>
+          <p id="student-appeal-status" class="form-error is-hidden" role="status" aria-live="polite"></p>
+          <button class="button button-primary" type="submit">提交给管理员核查</button>
+        </form>
+      </div>
+    </dialog>
 
     <dialog id="notifications-dialog" class="modal-card notification-dialog">
       <div class="modal-shell">

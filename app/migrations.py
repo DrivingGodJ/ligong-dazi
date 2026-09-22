@@ -8,6 +8,7 @@ from app.models import User
 
 SQLITE_COMPATIBILITY_COLUMNS = {
     "users": {
+        "student_id": "VARCHAR(24)",
         "gender": "VARCHAR(20) NOT NULL DEFAULT 'undisclosed'",
         "hidden_profile": "JSON NOT NULL DEFAULT '{}'",
         "hobby_skills": "JSON NOT NULL DEFAULT '[]'",
@@ -69,6 +70,9 @@ async def ensure_sqlite_compatibility(engine: AsyncEngine) -> None:
                         text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {definition}')
                     )
         if "users" in existing:
+            await connection.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_student_id ON users (student_id)")
+            )
             await connection.execute(
                 text(
                     "UPDATE users SET gender = 'undisclosed' "

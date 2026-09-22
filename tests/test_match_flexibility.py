@@ -11,6 +11,7 @@ async def test_optional_search_location_requires_a_place_only_when_creating(clie
         "/api/v1/auth/register",
         json={
             "email": "candidate-place@njust.edu.cn",
+            "student_id": "202600000003",
             "password": "test-password-123",
             "display_name": "可以被邀请的搭子",
             "campus": "南京",

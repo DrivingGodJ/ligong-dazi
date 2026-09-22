@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator
 
 import httpx
@@ -39,10 +40,12 @@ async def register_user(
     display_name: str,
     password: str = "test-password-123",
 ) -> tuple[str, dict[str, str]]:
+    student_id = hashlib.sha256(email.encode()).hexdigest()[:12].upper()
     response = await client.post(
         "/api/v1/auth/register",
         json={
             "email": email,
+            "student_id": student_id,
             "password": password,
             "display_name": display_name,
             "university": "南京理工大学",

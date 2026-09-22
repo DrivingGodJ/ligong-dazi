@@ -43,6 +43,14 @@ const elements = {
   accountArea: document.querySelector("#account-area"),
   accountName: document.querySelector("#account-name"),
   authError: document.querySelector("#auth-error"),
+  authAppealButton: document.querySelector("#auth-appeal-button"),
+  studentAppealDialog: document.querySelector("#student-appeal-dialog"),
+  studentAppealForm: document.querySelector("#student-appeal-form"),
+  studentAppealStatus: document.querySelector("#student-appeal-status"),
+  legacyStudentId: document.querySelector("#legacy-student-id"),
+  claimStudentIdForm: document.querySelector("#claim-student-id-form"),
+  claimStudentIdError: document.querySelector("#claim-student-id-error"),
+  claimAppealButton: document.querySelector("#claim-appeal-button"),
   loginForm: document.querySelector("#login-form"),
   registerForm: document.querySelector("#register-form"),
   matchForm: document.querySelector("#match-form"),
@@ -240,6 +248,7 @@ function switchAuthPanel(panel) {
   document.querySelector("#login-tab").setAttribute("aria-selected", String(loginActive));
   document.querySelector("#register-tab").setAttribute("aria-selected", String(!loginActive));
   hideInlineError(elements.authError);
+  elements.authAppealButton.classList.add("is-hidden");
   if (!loginActive) {
     showRegisterStep("account");
     const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -261,7 +270,7 @@ function showRegisterStep(step) {
 }
 
 function continueRegistration() {
-  const fields = ["display_name", "email", "password"].map(
+  const fields = ["display_name", "student_id", "password"].map(
     (name) => elements.registerForm.elements[name],
   );
   const invalid = fields.find((field) => !field.checkValidity());
@@ -334,12 +343,14 @@ async function handleLogin(event) {
   try {
     const result = await api("/auth/token", {
       method: "POST",
-      body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
+      body: JSON.stringify({ account: String(form.get("account")).trim(), password: form.get("password") }),
     });
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
     await loadCurrentUser();
-    switchTab(state.user.campus ? "match" : "profile");
+    elements.loginForm.reset();
+    switchTab(state.user.campus && state.user.student_id ? "match" : "profile");
+    if (!state.user.student_id) showToast("旧账号请到我的画像补填学号；原邮箱仍能登录");
   } catch (error) {
     showInlineError(elements.authError, error.message);
   } finally {
@@ -350,6 +361,7 @@ async function handleLogin(event) {
 async function handleRegister(event) {
   event.preventDefault();
   hideInlineError(elements.authError);
+  elements.authAppealButton.classList.add("is-hidden");
   const button = event.submitter;
   setButtonLoading(button, true, "正在创建账号…");
   const form = new FormData(elements.registerForm);
@@ -366,7 +378,7 @@ async function handleRegister(event) {
       method: "POST",
       body: JSON.stringify({
         display_name: String(form.get("display_name")).trim(),
-        email: form.get("email"),
+        student_id: String(form.get("student_id")).trim(),
         password: form.get("password"),
         university: "南京理工大学",
         campus: String(form.get("campus")).trim(),
@@ -384,10 +396,71 @@ async function handleRegister(event) {
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
     await loadCurrentUser();
-    switchTab(state.user.campus ? "match" : "profile");
-    showToast("画像已就位，去发起第一场搭子局吧");
+    elements.registerForm.reset();
+    showRegisterStep("account");
+    switchTab("square");
+    showToast("注册成功！先看看本校区的活动吧");
   } catch (error) {
     showInlineError(elements.authError, error.message);
+    elements.authAppealButton.classList.toggle("is-hidden", error.code !== "student_id_taken");
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+function openStudentAppeal(studentId) {
+  const value = String(studentId || "").trim().toUpperCase();
+  if (!value) return;
+  elements.studentAppealForm.reset();
+  elements.studentAppealForm.elements.student_id.value = value;
+  hideInlineError(elements.studentAppealStatus);
+  elements.studentAppealStatus.classList.remove("is-success");
+  elements.studentAppealDialog.showModal();
+  elements.studentAppealForm.elements.contact.focus();
+}
+
+async function submitStudentAppeal(event) {
+  event.preventDefault();
+  const button = event.submitter;
+  setButtonLoading(button, true, "正在提交…");
+  hideInlineError(elements.studentAppealStatus);
+  const form = new FormData(elements.studentAppealForm);
+  try {
+    const result = await api("/auth/student-id-appeals", {
+      method: "POST",
+      body: JSON.stringify({
+        student_id: form.get("student_id"),
+        contact: String(form.get("contact")).trim(),
+        description: String(form.get("description") || "").trim() || null,
+      }),
+    });
+    elements.studentAppealStatus.textContent = result.message;
+    elements.studentAppealStatus.classList.add("is-success");
+    elements.studentAppealStatus.classList.remove("is-hidden");
+  } catch (error) {
+    elements.studentAppealStatus.classList.remove("is-success");
+    showInlineError(elements.studentAppealStatus, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function claimStudentId(event) {
+  event.preventDefault();
+  hideInlineError(elements.claimStudentIdError);
+  elements.claimAppealButton.classList.add("is-hidden");
+  const button = event.submitter;
+  setButtonLoading(button, true, "正在绑定…");
+  try {
+    const studentId = elements.claimStudentIdForm.elements.student_id.value.trim();
+    state.user = await api("/users/me", {
+      method: "PATCH", body: JSON.stringify({student_id: studentId}),
+    });
+    populateProfileForm();
+    showToast("学号已绑定；以后可以用学号登录");
+  } catch (error) {
+    showInlineError(elements.claimStudentIdError, error.message);
+    elements.claimAppealButton.classList.toggle("is-hidden", error.code !== "student_id_taken");
   } finally {
     setButtonLoading(button, false);
   }
@@ -1732,6 +1805,7 @@ function populateProfileForm() {
   if (!state.user) return;
   window.clearTimeout(state.profileSaveTimer);
   const form = elements.profileForm.elements;
+  elements.legacyStudentId.classList.toggle("is-hidden", Boolean(state.user.student_id));
   form.display_name.value = state.user.display_name || "";
   form.campus.value = ["南京", "江阴"].includes(state.user.campus) ? state.user.campus : "";
   elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(form.campus.value));
@@ -1972,6 +2046,12 @@ function bindEvents() {
   document.querySelector("#register-tab").addEventListener("click", () => switchAuthPanel("register"));
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.registerForm.addEventListener("submit", handleRegister);
+  elements.claimStudentIdForm.addEventListener("submit", claimStudentId);
+  elements.studentAppealForm.addEventListener("submit", submitStudentAppeal);
+  elements.authAppealButton.addEventListener("click", () => openStudentAppeal(elements.registerForm.elements.student_id.value));
+  elements.claimAppealButton.addEventListener("click", () => openStudentAppeal(elements.claimStudentIdForm.elements.student_id.value));
+  elements.registerForm.elements.student_id.addEventListener("input", () => elements.authAppealButton.classList.add("is-hidden"));
+  elements.claimStudentIdForm.elements.student_id.addEventListener("input", () => elements.claimAppealButton.classList.add("is-hidden"));
   document.querySelector("#register-next").addEventListener("click", continueRegistration);
   document.querySelector("#register-back").addEventListener("click", () => showRegisterStep("account"));
   document.querySelector("#logout-button").addEventListener("click", () => logout());
@@ -2003,7 +2083,7 @@ function bindEvents() {
 
   document.querySelectorAll(".demo-account").forEach((button) => {
     button.addEventListener("click", () => {
-      elements.loginForm.elements.email.value = button.dataset.email;
+      elements.loginForm.elements.account.value = button.dataset.email;
       elements.loginForm.elements.password.value = "demo-password-123";
       elements.loginForm.elements.password.focus();
     });
@@ -2183,7 +2263,7 @@ async function initialize() {
     await loadCurrentUser();
     const initialTab = launch.get("tab");
     if (initialTab && ["match", "square", "invitations", "activities", "profile"].includes(initialTab)) switchTab(initialTab);
-    else if (!["南京", "江阴"].includes(state.user.campus)) switchTab("profile");
+    else if (!["南京", "江阴"].includes(state.user.campus) || !state.user.student_id) switchTab("profile");
   } catch {
     logout(false);
   }

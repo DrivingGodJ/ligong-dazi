@@ -16,7 +16,7 @@ from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, ActivityMember, Notification, PushSubscription, utcnow
+from app.models import Activity, ActivityMember, Notification, PushSubscription, User, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,27 @@ async def enqueue_activity_reminders(session: AsyncSession) -> None:
             "活动快开始啦",
             f"“{activity.title}”还有不到 15 分钟开始，记得出发！",
             "/?tab=activities",
+        )
+
+
+async def enqueue_legacy_student_id_notices(session: AsyncSession) -> None:
+    """Tell old email accounts about the new sign-in option once per account."""
+    user_ids = list(
+        (
+            await session.scalars(
+                select(User.id).where(User.student_id.is_(None), User.is_active.is_(True))
+            )
+        ).all()
+    )
+    for user_id in user_ids:
+        await enqueue_notification(
+            session,
+            user_id,
+            "student_id_migration_20260922",
+            "account_update",
+            "旧账号请补填学号",
+            "原邮箱和密码仍可登录。到“我的画像”绑定学号，之后也能用学号登录。",
+            "/?tab=profile",
         )
 
 

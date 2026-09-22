@@ -27,6 +27,9 @@ const state = {
   config: null,
   logs: [],
   filter: "all",
+  appealFilter: "pending",
+  appeals: [],
+  appealOffset: 0,
   toastTimer: null,
 };
 
@@ -60,6 +63,9 @@ const elements = {
   metricPending: document.querySelector("#metric-pending"),
   fallbackNote: document.querySelector("#fallback-note"),
   logList: document.querySelector("#log-list"),
+  appealList: document.querySelector("#admin-appeal-list"),
+  refreshAppeals: document.querySelector("#refresh-appeals"),
+  loadMoreAppeals: document.querySelector("#load-more-appeals"),
   refreshLogs: document.querySelector("#refresh-logs"),
   toast: document.querySelector("#admin-toast"),
 };
@@ -108,7 +114,39 @@ function showDashboard(requiresLogin) {
 }
 
 async function loadDashboard() {
-  await Promise.all([loadConfig(), loadOverview(), loadLogs()]);
+  await Promise.all([loadConfig(), loadOverview(), loadLogs(), loadAppeals()]);
+}
+
+function renderAppeals() {
+  if (!state.appeals.length) {
+    elements.appealList.innerHTML = `<div class="admin-empty">${state.appealFilter === "pending" ? "目前没有待处理的学号申诉。" : "目前没有已处理的申诉。"}</div>`;
+    return;
+  }
+  elements.appealList.innerHTML = state.appeals.map((item) => `<article class="admin-appeal-card">
+    <div class="appeal-card-heading"><strong>学号 ${escapeHtml(item.student_id)}</strong><time datetime="${escapeHtml(item.created_at)}">${escapeHtml(formatTime(item.created_at))}</time></div>
+    <p><b>联系申请人：</b><span>${escapeHtml(item.contact)}</span></p>
+    ${item.description ? `<p><b>补充说明：</b>${escapeHtml(item.description)}</p>` : ""}
+    <div class="appeal-card-footer"><span>${item.status === "handled" ? "已标记处理" : "等待人工核查"}</span>
+    ${item.status === "pending" ? `<button class="button button-quiet button-small" type="button" data-handle-appeal="${escapeHtml(item.id)}">核查后标记已处理</button>` : ""}</div>
+  </article>`).join("");
+}
+
+async function loadAppeals(more = false) {
+  if (!more) {
+    state.appeals = [];
+    state.appealOffset = 0;
+    elements.appealList.innerHTML = `<div class="admin-loading">正在读取申诉…</div>`;
+  }
+  try {
+    const page = await adminApi(`/student-id-appeals?status=${state.appealFilter}&offset=${state.appealOffset}&limit=30`);
+    state.appeals.push(...page);
+    state.appealOffset += page.length;
+    renderAppeals();
+    elements.loadMoreAppeals.classList.toggle("is-hidden", page.length < 30);
+  } catch (error) {
+    elements.appealList.innerHTML = `<div class="admin-empty">申诉暂时无法读取：${escapeHtml(error.message)}</div>`;
+    elements.loadMoreAppeals.classList.add("is-hidden");
+  }
 }
 
 async function loginAdmin(event) {
@@ -386,6 +424,27 @@ function bindEvents() {
     await Promise.all([loadOverview(), loadLogs()]);
     setButtonLoading(elements.refreshLogs, false);
   });
+  elements.refreshAppeals.addEventListener("click", async () => {
+    setButtonLoading(elements.refreshAppeals, true, "正在刷新…");
+    await loadAppeals();
+    setButtonLoading(elements.refreshAppeals, false);
+  });
+  elements.loadMoreAppeals.addEventListener("click", () => loadAppeals(true));
+  elements.appealList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-handle-appeal]");
+    if (!button) return;
+    setButtonLoading(button, true, "正在更新…");
+    try {
+      await adminApi(`/student-id-appeals/${button.dataset.handleAppeal}/handled`, {method: "POST"});
+      showToast("已标记处理；学号绑定不会自动改变");
+      await loadAppeals();
+    } catch (error) { showToast(error.message); setButtonLoading(button, false); }
+  });
+  document.querySelectorAll("[data-appeal-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.appealFilter = button.dataset.appealFilter;
+    document.querySelectorAll("[data-appeal-filter]").forEach((item) => item.classList.toggle("is-active", item === button));
+    loadAppeals();
+  }));
   elements.toggleKey.addEventListener("click", () => {
     const showing = elements.apiKey.type === "text";
     elements.apiKey.type = showing ? "password" : "text";
@@ -413,7 +472,7 @@ async function initialize() {
   bindEvents();
   window.setInterval(() => {
     if (!document.hidden && elements.loginPanel.classList.contains("is-hidden")) {
-      Promise.all([loadOverview(), loadLogs()]).catch(() => {});
+      Promise.all([loadOverview(), loadLogs(), loadAppeals()]).catch(() => {});
     }
   }, 30000);
   try {

@@ -69,6 +69,9 @@ class User(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    student_id: Mapped[str | None] = mapped_column(
+        String(24), unique=True, index=True, nullable=True
+    )
     password_hash: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(80))
     university: Mapped[str] = mapped_column(String(120), default="南京理工大学", index=True)
@@ -90,6 +93,18 @@ class User(Base, TimestampMixin):
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_summary_generated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class StudentIdAppeal(Base):
+    __tablename__ = "student_id_appeals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    student_id: Mapped[str] = mapped_column(String(24), index=True)
+    contact: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class UserBlock(Base):

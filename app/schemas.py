@@ -24,6 +24,13 @@ Gender = Literal["male", "female", "undisclosed"]
 Campus = Literal["南京", "江阴"]
 
 
+def normalize_student_id(value: str) -> str:
+    value = value.strip().upper()
+    if not 6 <= len(value) <= 24 or not value.isascii() or not value.isalnum():
+        raise ValueError("学号应为 6–24 位英文字母或数字")
+    return value
+
+
 class HobbySkill(ApiModel):
     name: str = Field(min_length=1, max_length=40)
     level: int = Field(ge=1, le=5)
@@ -56,7 +63,9 @@ def clean_hobby_skills(value: list[HobbySkill]) -> list[HobbySkill]:
 
 
 class RegisterRequest(ApiModel):
-    email: EmailStr
+    student_id: str
+    # Kept for older API clients; the current signup form does not ask for email.
+    email: EmailStr | None = None
     password: str = Field(min_length=8, max_length=128)
     display_name: str = Field(min_length=1, max_length=80)
     university: str = Field(default="南京理工大学", min_length=2, max_length=120)
@@ -77,6 +86,11 @@ class RegisterRequest(ApiModel):
     def clean_registration_lists(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
+    @field_validator("student_id")
+    @classmethod
+    def clean_student_id(cls, value: str) -> str:
+        return normalize_student_id(value)
+
     @field_validator("campus", mode="before")
     @classmethod
     def clean_campus(cls, value: str | None) -> str | None:
@@ -95,8 +109,49 @@ class RegisterRequest(ApiModel):
 
 
 class LoginRequest(ApiModel):
-    email: EmailStr
+    account: str | None = Field(default=None, max_length=320)
+    email: EmailStr | None = None  # Keeps older clients and existing email accounts usable.
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("account")
+    @classmethod
+    def clean_account(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def require_account(self) -> LoginRequest:
+        if not (self.account or self.email):
+            raise ValueError("请填写学号；旧用户也可以填写原注册邮箱")
+        return self
+
+
+class StudentIdAppealCreate(ApiModel):
+    student_id: str
+    contact: str = Field(min_length=5, max_length=160)
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("student_id")
+    @classmethod
+    def clean_student_id(cls, value: str) -> str:
+        return normalize_student_id(value)
+
+    @field_validator("contact")
+    @classmethod
+    def clean_contact(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 5:
+            raise ValueError("请填写能联系到你的微信、QQ、手机或邮箱")
+        return value
+
+
+class StudentIdAppealPublic(ApiModel):
+    id: str
+    student_id: str
+    contact: str
+    description: str | None
+    status: str
+    created_at: datetime
+    resolved_at: datetime | None
 
 
 class TokenResponse(ApiModel):
@@ -107,6 +162,7 @@ class TokenResponse(ApiModel):
 
 class UserProfileUpdate(ApiModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    student_id: str | None = None
     campus: Campus | None = None
     department: str | None = Field(default=None, max_length=120)
     grade_year: int | None = Field(default=None, ge=1, le=8)
@@ -123,6 +179,11 @@ class UserProfileUpdate(ApiModel):
     @classmethod
     def clean_campus(cls, value: str | None) -> str | None:
         return require_campus(value)
+
+    @field_validator("student_id")
+    @classmethod
+    def clean_student_id(cls, value: str | None) -> str | None:
+        return normalize_student_id(value) if value is not None else None
 
     @field_validator("interests", "preferred_locations")
     @classmethod
@@ -174,7 +235,8 @@ class UserPublic(ApiModel):
 
 
 class UserMe(UserPublic):
-    email: EmailStr
+    email: EmailStr | None
+    student_id: str | None
     is_active: bool
     created_at: datetime
     ai_summary: str | None

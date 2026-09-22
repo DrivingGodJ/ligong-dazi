@@ -8,9 +8,9 @@
     <meta name="theme-color" content="#14111b" media="(prefers-color-scheme: dark)" />
     <title>管理后台 · 理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=11" />
-    <link rel="stylesheet" href="/static/admin.css?v=4" />
-    <script src="/static/admin.js?v=3" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=15" />
+    <link rel="stylesheet" href="/static/admin.css?v=5" />
+    <script src="/static/admin.js?v=4" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#admin-content">跳到后台内容</a>
@@ -33,6 +33,7 @@
       <nav class="admin-nav" aria-label="后台页面导航">
         <a href="#overview">运行总览</a>
         <a href="#ai-service">AI 服务</a>
+        <a href="#student-appeals">学号申诉</a>
         <a href="#plain-logs">运行记录</a>
       </nav>
 
@@ -47,7 +48,7 @@
         <div class="admin-login-copy">
           <p class="eyebrow">管理员专用</p>
           <h1 id="admin-login-title">先验证身份，再管理搭子局</h1>
-          <p>登录后可以切换 AI 服务、保存 Key，并查看系统运行记录。普通用户不需要进入这里。</p>
+          <p>登录后可以切换 AI 服务、查看学号申诉和系统运行记录。普通用户不需要进入这里。</p>
         </div>
         <form id="admin-login-form" class="admin-login-card">
           <label for="admin-password">管理员口令</label>
@@ -229,6 +230,23 @@
             </article>
           </aside>
         </div>
+      </section>
+
+      <section id="student-appeals" class="admin-section" aria-labelledby="appeals-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">人工核查</p>
+            <h2 id="appeals-heading">学号占用申诉</h2>
+            <p>这里只给管理员查看联系方式。核实身份并联系当事人后，再标记为已处理；标记不会自动改绑学号。</p>
+          </div>
+          <button id="refresh-appeals" class="button button-small" type="button">刷新申诉</button>
+        </div>
+        <div class="appeal-toolbar" role="group" aria-label="筛选学号申诉">
+          <button class="log-filter is-active" type="button" data-appeal-filter="pending">待处理</button>
+          <button class="log-filter" type="button" data-appeal-filter="handled">已处理</button>
+        </div>
+        <div id="admin-appeal-list" class="admin-appeal-list" aria-live="polite"><div class="admin-loading">正在读取申诉…</div></div>
+        <button id="load-more-appeals" class="button button-quiet is-hidden" type="button">加载更多申诉</button>
       </section>
 
       <section id="plain-logs" class="admin-section log-section" aria-labelledby="logs-heading">

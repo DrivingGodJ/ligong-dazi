@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -21,7 +21,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import DatabaseRuntime, Settings
-from app.models import AgentRun, Invitation, MatchRequest, SystemEvent, User
+from app.models import (
+    AgentRun,
+    Invitation,
+    MatchRequest,
+    StudentIdAppeal,
+    SystemEvent,
+    User,
+    utcnow,
+)
 from app.schemas import (
     AdminAIConfigPublic,
     AdminAIConfigUpdate,
@@ -29,6 +37,7 @@ from app.schemas import (
     AdminLogItem,
     AdminLogStep,
     AdminOverview,
+    StudentIdAppealPublic,
 )
 
 router = APIRouter(prefix="/api/v1/admin", tags=["管理后台"])
@@ -178,6 +187,45 @@ async def create_admin_session(
 async def delete_admin_session(response: Response) -> dict[str, bool]:
     response.delete_cookie(ADMIN_COOKIE, path="/api/v1/admin")
     return {"authenticated": False}
+
+
+@router.get(
+    "/student-id-appeals",
+    response_model=list[StudentIdAppealPublic],
+    dependencies=[Depends(require_admin)],
+)
+async def list_student_id_appeals(
+    session: SessionDep,
+    appeal_status: Annotated[
+        Literal["pending", "handled", "all"], Query(alias="status")
+    ] = "pending",
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+) -> list[StudentIdAppealPublic]:
+    statement = select(StudentIdAppeal).order_by(StudentIdAppeal.created_at.desc())
+    if appeal_status != "all":
+        statement = statement.where(StudentIdAppeal.status == appeal_status)
+    rows = list((await session.scalars(statement.offset(offset).limit(limit))).all())
+    return [StudentIdAppealPublic.model_validate(row) for row in rows]
+
+
+@router.post(
+    "/student-id-appeals/{appeal_id}/handled",
+    response_model=StudentIdAppealPublic,
+    dependencies=[Depends(require_admin)],
+)
+async def mark_student_id_appeal_handled(
+    appeal_id: str,
+    session: SessionDep,
+) -> StudentIdAppealPublic:
+    appeal = await session.get(StudentIdAppeal, appeal_id)
+    if appeal is None:
+        raise HTTPException(status_code=404, detail="申诉记录不存在")
+    if appeal.status != "handled":
+        appeal.status = "handled"
+        appeal.resolved_at = utcnow()
+        await session.commit()
+    return StudentIdAppealPublic.model_validate(appeal)
 
 
 def load_persisted_ai_config(settings: Settings) -> None:

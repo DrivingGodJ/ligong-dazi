@@ -2,6 +2,15 @@
   grid-template-columns: auto 1fr auto;
 }
 
+.appeal-toolbar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.admin-appeal-list { display: grid; gap: 0.8rem; margin-bottom: 0.8rem; }
+.admin-appeal-card { padding: 1rem 1.2rem; background: var(--surface); border: 1px solid var(--line); border-radius: 15px; box-shadow: var(--shadow-small); }
+.appeal-card-heading, .appeal-card-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.appeal-card-heading strong { color: var(--brand-900); font-size: 1.1rem; }
+.appeal-card-heading time, .appeal-card-footer span { color: var(--ink-600); font-size: 0.85rem; }
+.admin-appeal-card p { margin: 0.6rem 0; overflow-wrap: anywhere; }
+.appeal-card-footer { margin-top: 0.85rem; }
+
 .admin-header-actions {
   display: flex;
   gap: 0.5rem;
