@@ -1,5 +1,6 @@
 const API_ROOT = "/api/v1";
 const TOKEN_KEY = "ligong_dazi_access_token";
+const IS_NATIVE_ANDROID = /LigongDaziNative\//.test(navigator.userAgent);
 
 const state = {
   token: localStorage.getItem(TOKEN_KEY),
@@ -254,7 +255,7 @@ function switchAuthPanel(panel) {
     const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
     const android = /Android/i.test(navigator.userAgent);
     document.querySelector("#ios-install-guide").classList.toggle("is-hidden", !ios || window.matchMedia("(display-mode: standalone)").matches);
-    document.querySelector("#android-install-guide").classList.toggle("is-hidden", !android);
+    document.querySelector("#android-install-guide").classList.toggle("is-hidden", !android || IS_NATIVE_ANDROID);
   }
 }
 
@@ -1252,6 +1253,10 @@ async function confirmLeaveActivity() {
 async function importActivityCalendar(activityId) {
   try {
     const blob = await apiBlob(`/activities/${activityId}/calendar.ics`);
+    if (IS_NATIVE_ANDROID && window.LigongCalendar) {
+      window.LigongCalendar.save(await blob.text());
+      return;
+    }
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1366,6 +1371,11 @@ async function loadNotifications() {
 function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
 async function refreshPushStatus() {
   const status = document.querySelector("#push-status");
+  if (IS_NATIVE_ANDROID) {
+    status.textContent = "应用版可以在这里查看所有站内消息；系统弹窗通知暂未接入，请不要依赖它提醒赴约。需要手机推送时仍可使用浏览器版。";
+    document.querySelector("#enable-push-button").classList.add("is-hidden");
+    return;
+  }
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
     status.textContent = "当前浏览器不支持手机推送；站内消息仍可查看。";
     return;
@@ -1383,6 +1393,7 @@ function decodeVapidKey(value) {
 }
 
 async function enablePush() {
+  if (IS_NATIVE_ANDROID) return;
   const button = document.querySelector("#enable-push-button");
   if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
     showToast("请用 Safari 添加到主屏幕，然后从桌面打开搭子局");
@@ -1414,15 +1425,16 @@ async function enablePush() {
 async function checkAndroidRelease() {
   if (!/Android/i.test(navigator.userAgent)) return;
   try {
-    const response = await fetch("/api/v1/app/version", {cache: "no-store"});
+    const response = await fetch(IS_NATIVE_ANDROID ? "/api/v1/app/native-version" : "/api/v1/app/version", {cache: "no-store"});
     if (!response.ok) return;
     const release = await response.json();
     if (!release.available) return;
-    document.querySelectorAll("#android-download-link, #profile-apk-link").forEach((link) => {
+    document.querySelectorAll(IS_NATIVE_ANDROID ? "#profile-apk-link" : "#android-download-link, #profile-apk-link").forEach((link) => {
       link.href = release.download_url;
       link.classList.remove("is-hidden");
+      if (IS_NATIVE_ANDROID) link.textContent = "查看应用版安装包";
     });
-    const installedVersion = Number(localStorage.getItem("dazi_android_app_version") || 0);
+    const installedVersion = Number(localStorage.getItem(IS_NATIVE_ANDROID ? "dazi_native_app_version" : "dazi_android_app_version") || 0);
     if (installedVersion && release.version_code > installedVersion) {
       document.querySelector("#profile-apk-link").textContent = `有新版 ${release.version_name}，点此下载安装`;
       if (sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
@@ -2248,8 +2260,8 @@ async function initialize() {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   }
   const launch = new URLSearchParams(window.location.search);
-  if (launch.get("source") === "android-app" && /^\d+$/.test(launch.get("version") || "")) {
-    localStorage.setItem("dazi_android_app_version", launch.get("version"));
+  if (["android-app", "android-native"].includes(launch.get("source")) && /^\d+$/.test(launch.get("version") || "")) {
+    localStorage.setItem(launch.get("source") === "android-native" ? "dazi_native_app_version" : "dazi_android_app_version", launch.get("version"));
   }
   checkAndroidRelease();
   initializeDates();

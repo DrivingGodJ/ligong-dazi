@@ -15,6 +15,8 @@ android/android.keystore
 android/.gradle/
 android/build/
 android/app/build/
+android/nativeapp/build/
+android/nativeapp-release-unsigned-aligned.apk
 android/local.properties
 android/app-release-unsigned.apk
 android/app-release-aligned.apk

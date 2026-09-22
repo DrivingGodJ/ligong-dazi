@@ -73,6 +73,17 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
     assert login.status_code == 200
 
 
+async def test_separate_native_app_download_and_version(client: httpx.AsyncClient) -> None:
+    version = await client.get("/api/v1/app/native-version")
+    assert version.status_code == 200
+    assert version.json()["version_code"] == 1
+    assert version.json()["download_url"] == "/downloads/ligong-dazi-native.apk"
+    apk = await client.get("/downloads/ligong-dazi-native.apk")
+    assert apk.status_code == 200
+    assert apk.content.startswith(b"PK")
+    assert apk.headers["content-type"] == "application/vnd.android.package-archive"
+
+
 async def test_agent_output_error_has_recoverable_code_and_no_cooldown(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,

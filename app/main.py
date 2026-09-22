@@ -162,6 +162,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "sha256": hashlib.sha256(apk_path.read_bytes()).hexdigest(),
         }
 
+    @app.get("/api/v1/app/native-version")
+    async def native_app_version() -> dict:
+        release_path = web_directory / "android-native-release.json"
+        apk_path = web_directory / "downloads" / "ligong-dazi-native.apk"
+        if not release_path.is_file() or not apk_path.is_file():
+            return {"available": False}
+        release = json.loads(release_path.read_text(encoding="utf-8"))
+        return {
+            "available": True,
+            "version_code": release["version_code"],
+            "version_name": release["version_name"],
+            "download_url": "/downloads/ligong-dazi-native.apk",
+            "sha256": hashlib.sha256(apk_path.read_bytes()).hexdigest(),
+        }
+
     @app.get("/downloads/ligong-dazi.apk", include_in_schema=False)
     async def android_download() -> FileResponse:
         apk_path = web_directory / "downloads" / "ligong-dazi.apk"
@@ -173,6 +188,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             apk_path,
             media_type="application/vnd.android.package-archive",
             filename="ligong-dazi.apk",
+        )
+
+    @app.get("/downloads/ligong-dazi-native.apk", include_in_schema=False)
+    async def native_android_download() -> FileResponse:
+        apk_path = web_directory / "downloads" / "ligong-dazi-native.apk"
+        if not apk_path.is_file():
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="安卓应用版尚未发布")
+        return FileResponse(
+            apk_path,
+            media_type="application/vnd.android.package-archive",
+            filename="ligong-dazi-native.apk",
         )
 
     @app.get("/health/live")

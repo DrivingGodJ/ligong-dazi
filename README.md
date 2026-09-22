@@ -116,6 +116,8 @@ uv run python -m scripts.seed_demo
 
 手机弹窗是可选功能，拒绝系统权限时仍能在右上角铃铛查看所有消息。iPhone 须从 Safari 添加到主屏幕并从桌面图标打开，点「打开手机通知」授权；普通浏览器标签页无法代替这一流程。安卓 APK 使用 Trusted Web Activity 包装同一网站，安装后登录并主动授权。Web Push 密钥存放在持久存储 `DAZI_PUSH_KEY_FILE_PATH`（Zeabur 默认 `/app/data/vapid_private.pem`），不要删掉或重建，否则旧设备的订阅会失效。
 
+另有一个可并排安装的独立窗口内测版：`/downloads/ligong-dazi-native.apk`。它用 Android WebView 在应用里打开相同的线上站点，不再启动外部浏览器；照片可从相册或相机选择，日历文件会交给系统应用打开。它的包名独立，登录状态不会从旧版或浏览器自动迁移，需要重新登录。**Android WebView 不支持沿用旧版 Web Push 订阅，内测版目前只有站内消息，没有系统弹窗推送**；要依赖赴约前提醒的用户应暂用旧版或浏览器版。尚未经过安卓真机验收，不要称其已正式替换原包。更新工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成独立签名 APK，版本号同时写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL；接口 `/api/v1/app/native-version` 提供内测版版本信息。以后接入可靠的原生推送并实测，再考虑替换正式下载入口。
+
 安卓下载地址是 `/downloads/ligong-dazi.apk`，版本查询为 `/api/v1/app/version`。应用从桌面启动时记住内置版本号，服务器有更新会在画像页提示下载；系统会要求用户确认安装，不会静默覆盖。网站与 APK 的签名关联文件位于 `/.well-known/assetlinks.json`。源工程在 `android/`，安装包签名密钥 `android/android.keystore` 不会上传 GitHub，密码保存在当前 Mac 钥匙串 `ligong-dazi-android-signing`；两者缺一都无法为已安装用户发布可覆盖更新，请单独、安全备份。没有 Android 真机时，自动测试只能核验构建与签名，实际通知权限及安装升级仍需设备验收。
 
 以后更新安卓外壳：把 `android/twa-manifest.json` 的 `appVersionCode`、`appVersionName` 和启动链接里的 `version` 一起提高，并同步 `android/app/build.gradle` 与 `web/android-release.json`；在原签名密钥仍在这台 Mac 上的前提下运行 `bash scripts/build_android.sh`，确认签名指纹与 `web/assetlinks.json` 一致，再提交新 APK。普通网页改动不必重新打包，线上网站更新后 APK 会读取新网页。
