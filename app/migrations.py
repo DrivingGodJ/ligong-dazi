@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.campus import CAMPUSES, infer_campus
@@ -83,27 +83,25 @@ async def ensure_sqlite_compatibility(engine: AsyncEngine) -> None:
 
 
 async def migrate_user_campuses(session: AsyncSession) -> int:
-    """Normalize identifiable legacy values; leave ambiguous profiles untouched."""
+    """Normalize legacy values; default missing or unclear campuses to Jiangyin."""
 
     users = list((await session.scalars(select(User))).all())
     migrated = 0
     for user in users:
         if user.campus in CAMPUSES:
             continue
-        campus = infer_campus(user.campus, user.preferred_locations)
-        if campus is not None:
-            user.campus = campus
-            migrated += 1
+        user.campus = infer_campus(user.campus) or "江阴"
+        migrated += 1
     return migrated
 
 
 async def migrate_user_colleges(session: AsyncSession) -> int:
-    """Map recognized old department text to the current college choices."""
+    """Map known college names and reset unrecognized legacy text to the empty default."""
     users = list((await session.scalars(select(User).where(User.department.is_not(None)))).all())
     migrated = 0
     for user in users:
         college = match_college(user.department)
-        if college is not None and college != user.department:
+        if college != user.department:
             user.department = college
             migrated += 1
     return migrated
@@ -127,14 +125,15 @@ async def remove_emails_from_bound_accounts(session: AsyncSession) -> int:
 
 
 async def migrate_activity_campuses(session: AsyncSession) -> int:
-    """Keep old activities in their creator's recognized campus, never infer arbitrarily."""
+    """Keep legacy activities in their creator's normalized campus."""
     from app.models import Activity
 
+    await session.flush()
     rows = (
         await session.execute(
             select(Activity, User.campus)
             .join(User, User.id == Activity.owner_id)
-            .where(Activity.campus.is_(None))
+            .where(or_(Activity.campus.is_(None), Activity.campus.not_in(CAMPUSES)))
         )
     ).all()
     for activity, campus in rows:

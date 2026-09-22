@@ -6,8 +6,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.migrations import ensure_sqlite_compatibility, migrate_user_campuses
-from app.models import User
+from app.migrations import (
+    ensure_sqlite_compatibility,
+    migrate_activity_campuses,
+    migrate_user_campuses,
+)
+from app.models import Activity, User
 from tests.conftest import register_user
 
 
@@ -32,11 +36,26 @@ async def test_existing_sqlite_tables_gain_same_gender_rule_columns(tmp_path) ->
         await database.dispose()
 
 
-async def test_legacy_campus_migration_keeps_ambiguous_values(client) -> None:
+async def test_legacy_campus_migration_defaults_ambiguous_values_to_jiangyin(client) -> None:
     _, south_headers = await register_user(client, "south@njust.edu.cn", "南区同学")
     _, north_headers = await register_user(client, "north@njust.edu.cn", "北区同学")
     _, river_headers = await register_user(client, "river@njust.edu.cn", "江阴同学")
     _, unclear_headers = await register_user(client, "unclear@njust.edu.cn", "待确认同学")
+    _, blank_headers = await register_user(client, "blank@njust.edu.cn", "未填校区同学")
+    start = datetime.now(UTC) + timedelta(days=1)
+    old_activity = await client.post(
+        "/api/v1/activities",
+        headers=unclear_headers,
+        json={
+            "title": "旧校区活动",
+            "category": "跑步",
+            "starts_at": start.isoformat(),
+            "ends_at": (start + timedelta(hours=1)).isoformat(),
+            "location": "操场",
+            "capacity": 3,
+        },
+    )
+    assert old_activity.status_code == 201
     app = client._transport.app  # type: ignore[attr-defined]
     async with app.state.database.session_factory() as session:
         users = list((await session.scalars(select(User))).all())
@@ -46,16 +65,24 @@ async def test_legacy_campus_migration_keeps_ambiguous_values(client) -> None:
         by_name["江阴同学"].campus = None
         by_name["江阴同学"].preferred_locations = ["江阴校区体育馆"]
         by_name["待确认同学"].campus = "宿舍"
+        by_name["未填校区同学"].campus = None
+        by_name["未填校区同学"].preferred_locations = ["南京图书馆"]
+        activity = await session.get(Activity, old_activity.json()["id"])
+        assert activity is not None
+        activity.campus = "宿舍"
         await session.commit()
-        assert await migrate_user_campuses(session) == 3
+        assert await migrate_user_campuses(session) == 5
+        assert await migrate_activity_campuses(session) == 1
         await session.commit()
         assert await migrate_user_campuses(session) == 0
+        assert (await session.get(Activity, old_activity.json()["id"])).campus == "江阴"
 
     for headers, expected in (
         (south_headers, "南京"),
         (north_headers, "南京"),
         (river_headers, "江阴"),
-        (unclear_headers, "宿舍"),
+        (unclear_headers, "江阴"),
+        (blank_headers, "江阴"),
     ):
         response = await client.get("/api/v1/users/me", headers=headers)
         assert response.json()["campus"] == expected

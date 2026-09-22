@@ -18,6 +18,12 @@ const state = {
   timeVotes: [],
   photoObjectUrls: [],
   photoLoadGeneration: 0,
+  photoRefreshTimer: null,
+  photoRenderedSignature: null,
+  photoActivityId: null,
+  photoRequestInFlight: false,
+  photoRequestSequence: 0,
+  photoUploading: false,
   peerTasks: [],
   applications: [],
   notifications: [],
@@ -109,8 +115,6 @@ const elements = {
   profileCredit: document.querySelector("#profile-credit"),
   profileStatus: document.querySelector("#profile-status"),
   profileRetry: document.querySelector("#profile-retry"),
-  campusMigrationNote: document.querySelector("#campus-migration-note"),
-  legacyDepartmentNote: document.querySelector("#legacy-department-note"),
   aiSummaryCopy: document.querySelector("#ai-summary-copy"),
   aiSummaryCooldown: document.querySelector("#ai-summary-cooldown"),
   generateSummaryButton: document.querySelector("#generate-summary-button"),
@@ -145,6 +149,7 @@ const elements = {
   photoForm: document.querySelector("#activity-photo-form"),
   photoList: document.querySelector("#activity-photo-list"),
   photoError: document.querySelector("#activity-photo-error"),
+  photoSyncStatus: document.querySelector("#activity-photo-sync-status"),
   activityParticipantsDialog: document.querySelector("#activity-participants-dialog"),
   activityParticipantsTitle: document.querySelector("#activity-participants-title"),
   activityParticipantsSummary: document.querySelector("#activity-participants-summary"),
@@ -501,7 +506,7 @@ async function claimStudentId(event) {
 function switchTab(tabName) {
   if (state.user && !["南京", "江阴"].includes(state.user.campus) && tabName !== "profile") {
     tabName = "profile";
-    showToast("先选择南京或江阴校区，才能查看活动和搭子");
+    showToast("先在我的画像中确认校区，才能查看活动和搭子");
   }
   document.querySelectorAll(".nav-button[data-tab]").forEach((button) => {
     const active = button.dataset.tab === tabName;
@@ -1519,35 +1524,93 @@ function revokePhotoUrls() {
   state.photoObjectUrls = [];
 }
 
+function stopPhotoRefresh() {
+  window.clearInterval(state.photoRefreshTimer);
+  state.photoRefreshTimer = null;
+}
+
+function startPhotoRefresh() {
+  stopPhotoRefresh();
+  if (!elements.photoDialog.open || document.hidden) return;
+  state.photoRefreshTimer = window.setInterval(() => {
+    if (state.photoActivityId) loadActivityPhotos(state.photoActivityId);
+  }, 5000);
+}
+
+function closePhotoViewer() {
+  stopPhotoRefresh();
+  state.photoActivityId = null;
+  state.photoRenderedSignature = null;
+  state.photoRequestSequence += 1;
+  state.photoRequestInFlight = false;
+  revokePhotoUrls();
+}
+
+function updatePhotoUploadAvailability() {
+  const activity = state.activeActivity?.activity;
+  if (!activity) return false;
+  const now = Date.now();
+  const opensAt = new Date(activity.starts_at).getTime() - 15 * 60 * 1000;
+  const endsAt = new Date(activity.ends_at).getTime();
+  const allowed = now >= opensAt && now < endsAt;
+  elements.photoForm.elements.photo.disabled = !allowed || state.photoUploading;
+  elements.photoForm.querySelector("button[type='submit']").disabled = !allowed || state.photoUploading;
+  if (allowed && elements.photoError.textContent.startsWith("上传入口将在")) {
+    hideInlineError(elements.photoError);
+  }
+  return now >= endsAt;
+}
+
 async function openPhotoDialog(activityId) {
   const item = state.activities.find((entry) => entry.activity.id === activityId);
   if (!item) return;
   state.activeActivity = item;
+  stopPhotoRefresh();
+  revokePhotoUrls();
+  state.photoActivityId = activityId;
+  state.photoRenderedSignature = null;
+  state.photoRequestSequence += 1;
+  state.photoRequestInFlight = false;
   elements.photoForm.reset();
   hideInlineError(elements.photoError);
   elements.photoForm.elements.activity_id.value = activityId;
   elements.photoDialogTitle.textContent = `“${item.activity.title}”集合照片`;
   const opensAt = new Date(item.activity.starts_at).getTime() - 15 * 60 * 1000;
-  const uploadButton = elements.photoForm.querySelector("button[type='submit']");
   const tooEarly = Date.now() < opensAt;
-  elements.photoForm.elements.photo.disabled = tooEarly;
-  uploadButton.disabled = tooEarly;
+  updatePhotoUploadAvailability();
   if (tooEarly) {
     showInlineError(elements.photoError, `上传入口将在 ${formatDate(new Date(opensAt).toISOString())} 开放。`);
   }
   elements.photoList.innerHTML = `<div class="empty-list">正在加载搭子们看到的照片…</div>`;
+  elements.photoSyncStatus.textContent = "展示期间每 5 秒自动同步新照片";
   elements.photoDialog.showModal();
+  startPhotoRefresh();
   await loadActivityPhotos(activityId);
 }
 
 async function loadActivityPhotos(activityId) {
-  revokePhotoUrls();
-  const generation = state.photoLoadGeneration;
+  if (state.photoRequestInFlight || !elements.photoDialog.open || activityId !== state.photoActivityId) return;
+  state.photoRequestInFlight = true;
+  const requestSequence = ++state.photoRequestSequence;
   try {
-    const photos = await api(`/activities/${activityId}/photos`);
-    if (generation !== state.photoLoadGeneration) return;
+    const photos = await api(`/activities/${activityId}/photos`, { cache: "no-store" });
+    if (requestSequence !== state.photoRequestSequence || activityId !== state.photoActivityId) return;
+    const ended = updatePhotoUploadAvailability();
+    const signature = photos.map((photo) => photo.id).join("|");
+    if (signature === state.photoRenderedSignature && !ended) return;
+    state.photoRenderedSignature = signature;
+    revokePhotoUrls();
+    const generation = state.photoLoadGeneration;
+    elements.photoSyncStatus.textContent = ended
+      ? "活动已结束，集合照片已自动删除"
+      : `实时同步中 · 当前 ${photos.length} 张照片`;
+    if (ended) {
+      stopPhotoRefresh();
+    }
     if (!photos.length) {
-      elements.photoList.innerHTML = `<div class="empty-list">还没有照片。接近集合时间时，拍一张周围环境给搭子看吧。</div>`;
+      elements.photoList.innerHTML = ended
+        ? `<div class="empty-list">活动已结束，集合照片已删除。</div>`
+        : `<div class="empty-list">还没有照片。接近集合时间时，拍一张周围环境给搭子看吧。</div>`;
       return;
     }
     elements.photoList.replaceChildren();
@@ -1559,8 +1622,13 @@ async function loadActivityPhotos(activityId) {
       loadPhotoCard(photo, card, generation);
     }
   } catch (error) {
-    if (generation !== state.photoLoadGeneration) return;
-    elements.photoList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+    if (requestSequence !== state.photoRequestSequence || activityId !== state.photoActivityId) return;
+    elements.photoSyncStatus.textContent = "同步暂时中断，正在自动重试";
+    if (state.photoRenderedSignature === null) {
+      elements.photoList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    if (requestSequence === state.photoRequestSequence) state.photoRequestInFlight = false;
   }
 }
 
@@ -1640,6 +1708,7 @@ async function uploadActivityPhoto(event) {
     showInlineError(elements.photoError, "原照片不能超过 25 MB，请换一张或先在相册里缩小。 ");
     return;
   }
+  state.photoUploading = true;
   setButtonLoading(button, true, "正在压缩照片…");
   try {
     const compressed = await imageToCompressedBlob(file);
@@ -1657,7 +1726,9 @@ async function uploadActivityPhoto(event) {
   } catch (error) {
     showInlineError(elements.photoError, error.message);
   } finally {
+    state.photoUploading = false;
     setButtonLoading(button, false);
+    updatePhotoUploadAvailability();
   }
 }
 
@@ -1878,24 +1949,8 @@ function populateProfileForm() {
   const form = elements.profileForm.elements;
   elements.legacyStudentId.classList.toggle("is-hidden", Boolean(state.user.student_id));
   form.display_name.value = state.user.display_name || "";
-  form.campus.value = ["南京", "江阴"].includes(state.user.campus) ? state.user.campus : "";
-  elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(form.campus.value));
-  elements.campusMigrationNote.textContent = form.campus.value
-    ? ""
-    : `旧资料${state.user.campus ? `“${state.user.campus}”` : ""}无法确定属于哪个校区，请选择南京或江阴；选择后会自动保存。`;
-  form.department.querySelector("[data-legacy-college]")?.remove();
-  const currentDepartment = state.user.department || "";
-  const legacyDepartment = currentDepartment && !COLLEGES.includes(currentDepartment);
-  if (legacyDepartment) {
-    const option = new Option(`原填写：${currentDepartment}`, currentDepartment);
-    option.dataset.legacyCollege = "";
-    form.department.add(option);
-  }
-  form.department.value = currentDepartment;
-  elements.legacyDepartmentNote.classList.toggle("is-hidden", !legacyDepartment);
-  elements.legacyDepartmentNote.textContent = legacyDepartment
-    ? "原填写的学院暂时保留。你可以从列表中选择新名称，其他资料会继续自动保存。"
-    : "";
+  form.campus.value = state.user.campus === "南京" ? "南京" : "江阴";
+  form.department.value = COLLEGES.includes(state.user.department) ? state.user.department : "";
   form.grade_year.value = state.user.grade_year || "";
   form.gender.value = state.user.gender || "undisclosed";
   form.bio.value = state.user.bio || "";
@@ -2282,7 +2337,15 @@ function bindEvents() {
     if (button) respondTimeVote(button);
   });
   elements.photoForm.addEventListener("submit", uploadActivityPhoto);
-  elements.photoDialog.addEventListener("close", revokePhotoUrls);
+  elements.photoDialog.addEventListener("close", closePhotoViewer);
+  document.addEventListener("visibilitychange", () => {
+    if (!elements.photoDialog.open) return;
+    if (document.hidden) stopPhotoRefresh();
+    else {
+      startPhotoRefresh();
+      if (state.photoActivityId) loadActivityPhotos(state.photoActivityId);
+    }
+  });
   elements.feedbackForm.addEventListener("submit", submitFeedback);
   elements.peerReviewList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-peer-task]");
@@ -2300,12 +2363,6 @@ function bindEvents() {
     queueProfileSave();
   });
   elements.profileForm.addEventListener("change", (event) => {
-    if (event.target.name === "campus") {
-      elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(event.target.value));
-    }
-    if (event.target.name === "department" && COLLEGES.includes(event.target.value)) {
-      elements.legacyDepartmentNote.classList.add("is-hidden");
-    }
     queueProfileSave(true);
   });
   elements.profileRetry.addEventListener("click", () => queueProfileSave(true));
@@ -2345,8 +2402,8 @@ function bindEvents() {
 
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.dataset.closeDialog === "activity-photo-dialog") closePhotoViewer();
       document.querySelector(`#${button.dataset.closeDialog}`).close();
-      if (button.dataset.closeDialog === "activity-photo-dialog") revokePhotoUrls();
     });
   });
   document.querySelectorAll(".tag-field input[type='checkbox']").forEach((input) => {

@@ -75,7 +75,7 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
     assert login.status_code == 200
 
 
-async def test_college_choices_and_legacy_department_are_preserved(
+async def test_college_choices_and_unknown_legacy_department_uses_default(
     client: httpx.AsyncClient,
 ) -> None:
     assert len(COLLEGES) == 23
@@ -86,6 +86,8 @@ async def test_college_choices_and_legacy_department_are_preserved(
     page = (await client.get("/")).text
     script = (await client.get("/static/app.js")).text
     assert page.count('name="department" data-college-select') == 2
+    assert page.count('<option value="江阴" selected>江阴</option>') == 2
+    assert '请选择南京或江阴' not in page
     assert all(f'"{college}"' in script for college in COLLEGES)
 
     invalid = await client.post(
@@ -119,14 +121,22 @@ async def test_college_choices_and_legacy_department_are_preserved(
         assert user is not None
         user.department = "历史填写的旧学院"
         await session.commit()
-    retained = await client.patch(
+    rejected_legacy = await client.patch(
         "/api/v1/users/me",
         headers=headers,
         json={"department": "历史填写的旧学院", "bio": "资料仍可自动保存"},
     )
-    assert retained.status_code == 200
-    assert retained.json()["department"] == "历史填写的旧学院"
-    assert retained.json()["bio"] == "资料仍可自动保存"
+    assert rejected_legacy.status_code == 422
+    async with app.state.database.session_factory() as session:
+        assert await migrate_user_colleges(session) == 1
+        await session.commit()
+    defaulted = await client.get("/api/v1/users/me", headers=headers)
+    assert defaulted.json()["department"] is None
+    saved = await client.patch(
+        "/api/v1/users/me", headers=headers, json={"bio": "资料仍可自动保存"}
+    )
+    assert saved.status_code == 200
+    assert saved.json()["bio"] == "资料仍可自动保存"
 
     async with app.state.database.session_factory() as session:
         user = await session.scalar(

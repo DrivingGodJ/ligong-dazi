@@ -611,9 +611,9 @@ async def update_me(
         department = values["department"]
         if department is not None:
             matched = match_college(department)
-            if matched is None and department.strip() != current_user.department:
+            if matched is None:
                 raise HTTPException(status_code=422, detail="请选择列表中的学院")
-            values["department"] = matched or department.strip()
+            values["department"] = matched
     min_group = values.get("preferred_group_min", current_user.preferred_group_min)
     max_group = values.get("preferred_group_max", current_user.preferred_group_max)
     if min_group > max_group:
