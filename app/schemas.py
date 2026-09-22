@@ -84,9 +84,7 @@ class RegisterRequest(ApiModel):
 
     @field_validator("hobby_skills")
     @classmethod
-    def clean_registration_hobby_skills(
-        cls, value: list[HobbySkill]
-    ) -> list[HobbySkill]:
+    def clean_registration_hobby_skills(cls, value: list[HobbySkill]) -> list[HobbySkill]:
         return clean_hobby_skills(value)
 
     @model_validator(mode="after")
@@ -138,9 +136,7 @@ class UserProfileUpdate(ApiModel):
 
     @field_validator("hobby_skills")
     @classmethod
-    def clean_profile_hobby_skills(
-        cls, value: list[HobbySkill] | None
-    ) -> list[HobbySkill] | None:
+    def clean_profile_hobby_skills(cls, value: list[HobbySkill] | None) -> list[HobbySkill] | None:
         if value is None:
             return None
         if len(value) > 20:
@@ -221,6 +217,7 @@ class ActivityCreate(ApiModel):
     description: str | None = Field(default=None, max_length=1000)
     personal_requirement: str | None = Field(default=None, max_length=500)
     same_gender_only: bool = False
+    join_policy: Literal["open", "approval"] = "open"
 
     @field_validator("location")
     @classmethod
@@ -249,6 +246,8 @@ class ActivityCreate(ApiModel):
 class ActivityPublic(ApiModel):
     id: str
     owner_id: str
+    campus: str | None
+    join_policy: Literal["open", "approval"]
     title: str
     category: str
     starts_at: datetime
@@ -327,6 +326,7 @@ class MatchConfirmRequest(ApiModel):
     existing_activity_id: str | None = None
     create_solo_activity: bool = False
     location: str | None = Field(default=None, max_length=160)
+    join_policy: Literal["open", "approval"] = "open"
 
     @field_validator("location")
     @classmethod
@@ -406,6 +406,7 @@ class ActivitySquareItem(ApiModel):
     joined: bool
     joinable: bool
     join_reason: str | None = None
+    application_status: str | None = None
     recommendation_score: float
     recommendation_reasons: list[str] = Field(default_factory=list)
 
@@ -421,6 +422,37 @@ class ActivitySquarePage(ApiModel):
 class ActivityJoinResult(ApiModel):
     activity: ActivityPublic
     message: str
+
+
+class JoinApplicationPublic(ApiModel):
+    id: str
+    activity_id: str
+    applicant: UserPublic
+    status: str
+    approvals: int
+    required_approvals: int
+    my_decision: str | None
+    created_at: datetime
+
+
+class JoinApplicationDecision(ApiModel):
+    decision: Literal["approved", "rejected"]
+
+
+class PushSubscriptionRequest(ApiModel):
+    endpoint: str = Field(max_length=2048)
+    p256dh: str = Field(min_length=20, max_length=512)
+    auth: str = Field(min_length=8, max_length=512)
+
+
+class NotificationPublic(ApiModel):
+    id: str
+    kind: str
+    title: str
+    body: str
+    url: str
+    created_at: datetime
+    read_at: datetime | None
 
 
 class ActivityPhotoUpload(ApiModel):

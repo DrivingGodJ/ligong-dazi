@@ -19,6 +19,8 @@ SQLITE_COMPATIBILITY_COLUMNS = {
     "activities": {
         "post_activity_processed_at": "DATETIME",
         "same_gender_only": "BOOLEAN NOT NULL DEFAULT 0",
+        "campus": "VARCHAR(80)",
+        "join_policy": "VARCHAR(20) NOT NULL DEFAULT 'open'",
     },
     "match_requests": {
         "same_gender_only": "BOOLEAN NOT NULL DEFAULT 0",
@@ -88,3 +90,20 @@ async def migrate_user_campuses(session: AsyncSession) -> int:
             user.campus = campus
             migrated += 1
     return migrated
+
+
+async def migrate_activity_campuses(session: AsyncSession) -> int:
+    """Keep old activities in their creator's recognized campus, never infer arbitrarily."""
+    from app.models import Activity
+
+    rows = (
+        await session.execute(
+            select(Activity, User.campus)
+            .join(User, User.id == Activity.owner_id)
+            .where(Activity.campus.is_(None))
+        )
+    ).all()
+    for activity, campus in rows:
+        if campus in CAMPUSES:
+            activity.campus = campus
+    return sum(campus in CAMPUSES for _, campus in rows)

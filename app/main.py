@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
@@ -17,19 +19,27 @@ from app.admin import load_persisted_ai_config
 from app.admin import router as admin_router
 from app.api import router as api_router
 from app.core import DatabaseRuntime, Settings, get_settings
-from app.migrations import ensure_sqlite_compatibility, migrate_user_campuses
+from app.migrations import (
+    ensure_sqlite_compatibility,
+    migrate_activity_campuses,
+    migrate_user_campuses,
+)
 from app.models import Base
+from app.notifications import dispatch_push, enqueue_activity_reminders, ensure_push_key
 from app.post_activity import process_completed_activities
 
 logger = logging.getLogger(__name__)
 
 
-async def post_activity_maintenance(database: DatabaseRuntime) -> None:
+async def post_activity_maintenance(database: DatabaseRuntime, push_key_path: str) -> None:
     while True:
         try:
             async with database.session_factory() as session:
                 await process_completed_activities(session)
                 await cleanup_expired_activity_photos(session)
+                await enqueue_activity_reminders(session)
+                await session.commit()
+                await dispatch_push(session, push_key_path)
                 await session.commit()
         except Exception:
             logger.exception("活动结束后的画像分析任务执行失败")
@@ -43,9 +53,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if app_settings.environment == "production":
-            if os.environ.get("RAILWAY_SERVICE_ID") and os.environ.get(
-                "RAILWAY_VOLUME_MOUNT_PATH"
-            ) != "/app/data":
+            if (
+                os.environ.get("RAILWAY_SERVICE_ID")
+                and os.environ.get("RAILWAY_VOLUME_MOUNT_PATH") != "/app/data"
+            ):
                 raise RuntimeError("Railway 上必须先挂载 /app/data 持久化存储")
             if os.environ.get("ZEABUR_ENVIRONMENT_ID") and not await asyncio.to_thread(
                 os.path.ismount, "/app/data"
@@ -54,6 +65,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await asyncio.to_thread(load_persisted_ai_config, app_settings)
         database = DatabaseRuntime(app_settings)
         app.state.database = database
+        app.state.vapid_public_key = await asyncio.to_thread(
+            ensure_push_key, app_settings.push_key_file_path
+        )
         photo_directory = await asyncio.to_thread(
             lambda: Path(app_settings.activity_photo_directory).expanduser().resolve()
         )
@@ -66,10 +80,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             migrated_campuses = await migrate_user_campuses(session)
             if migrated_campuses:
                 logger.info("已将 %s 位用户的旧校区资料归一为南京或江阴", migrated_campuses)
+            await migrate_activity_campuses(session)
             await process_completed_activities(session)
             await cleanup_expired_activity_photos(session)
+            await enqueue_activity_reminders(session)
             await session.commit()
-        maintenance_task = asyncio.create_task(post_activity_maintenance(database))
+        maintenance_task = asyncio.create_task(
+            post_activity_maintenance(database, app_settings.push_key_file_path)
+        )
         yield
         maintenance_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -103,6 +121,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/admin", include_in_schema=False)
     async def admin_frontend() -> FileResponse:
         return FileResponse(web_directory / "admin.html")
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def manifest() -> FileResponse:
+        return FileResponse(
+            web_directory / "manifest.webmanifest", media_type="application/manifest+json"
+        )
+
+    @app.get("/service-worker.js", include_in_schema=False)
+    async def service_worker() -> FileResponse:
+        return FileResponse(
+            web_directory / "service-worker.js",
+            media_type="application/javascript",
+            headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+        )
+
+    @app.get("/.well-known/assetlinks.json", include_in_schema=False)
+    async def android_asset_links() -> FileResponse:
+        return FileResponse(web_directory / "assetlinks.json", media_type="application/json")
+
+    @app.get("/api/v1/app/version")
+    async def app_version() -> dict:
+        release_path = web_directory / "android-release.json"
+        apk_path = web_directory / "downloads" / "ligong-dazi.apk"
+        if not release_path.is_file() or not apk_path.is_file():
+            return {"available": False}
+        release = json.loads(release_path.read_text(encoding="utf-8"))
+        return {
+            "available": True,
+            "version_code": release["version_code"],
+            "version_name": release["version_name"],
+            "download_url": "/downloads/ligong-dazi.apk",
+            "sha256": hashlib.sha256(apk_path.read_bytes()).hexdigest(),
+        }
+
+    @app.get("/downloads/ligong-dazi.apk", include_in_schema=False)
+    async def android_download() -> FileResponse:
+        apk_path = web_directory / "downloads" / "ligong-dazi.apk"
+        if not apk_path.is_file():
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="安卓安装包尚未发布")
+        return FileResponse(
+            apk_path,
+            media_type="application/vnd.android.package-archive",
+            filename="ligong-dazi.apk",
+        )
 
     @app.get("/health/live")
     async def health_live() -> dict[str, str]:

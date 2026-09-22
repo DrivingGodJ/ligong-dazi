@@ -12,6 +12,11 @@
 
 - 邮箱注册、登录、JWT 鉴权与个人画像
 - 两步注册引导：校区只选南京或江阴，再补充院系、性别、兴趣、爱好水平、地点与社交方式；可识别的旧校区资料在启动时自动迁移
+- 未选校区的旧账号必须先补选；广场、匹配候选与新活动加入仅向本校区开放。已经共同参加的旧活动仍可查看。
+- 活动可设置自由加入或申请入局；后者需现有成员全部同意，成员可先查看申请人的档案
+- 顶部保留名称与消息入口，主导航固定在屏幕底部并适配手机安全区域
+- 站内通知与自愿授权的手机推送：邀请、开始前 15 分钟、入局申请、公开活动新成员、改期提案
+- iPhone 注册页提示从 Safari 添加到主屏幕后授权通知；安卓提供带签名的应用包下载及版本提示（安装更新需用户确认）
 - 活动创建、查询、参与者和容量管理
 - `personal_requirement` 自然语言个性化需求
 - 匹配 Agent：查询已有活动、查询无时间冲突用户、计算匹配度
@@ -53,6 +58,7 @@ app/
   activity_media.py  集合照片清理与日历文件生成
   profile_summary.py AI 综合形象总结与无模型回退
   migrations.py     兼容已有本地 SQLite 数据的轻量升级
+  notifications.py  站内通知、Web Push 和活动开始提醒
   models.py     用户、活动、邀请、匹配、信用等数据表
   schemas.py    请求与响应校验
   core.py       配置、数据库、密码与 JWT
@@ -102,6 +108,15 @@ uv run python -m scripts.seed_demo
 - 浏览和筛选活动广场、直接加入活动
 - 发起或参与改期投票、导入手机日历、在集合窗口共享照片
 - 生成只给本人查看的 AI 综合形象总结
+- 查看通知收件箱、审阅申请人档案并逐一同意或拒绝加入
+
+## 手机通知和安卓安装包
+
+手机弹窗是可选功能，拒绝系统权限时仍能在右上角铃铛查看所有消息。iPhone 须从 Safari 添加到主屏幕并从桌面图标打开，点「打开手机通知」授权；普通浏览器标签页无法代替这一流程。安卓 APK 使用 Trusted Web Activity 包装同一网站，安装后登录并主动授权。Web Push 密钥存放在持久存储 `DAZI_PUSH_KEY_FILE_PATH`（Zeabur 默认 `/app/data/vapid_private.pem`），不要删掉或重建，否则旧设备的订阅会失效。
+
+安卓下载地址是 `/downloads/ligong-dazi.apk`，版本查询为 `/api/v1/app/version`。应用从桌面启动时记住内置版本号，服务器有更新会在画像页提示下载；系统会要求用户确认安装，不会静默覆盖。网站与 APK 的签名关联文件位于 `/.well-known/assetlinks.json`。源工程在 `android/`，安装包签名密钥 `android/android.keystore` 不会上传 GitHub，密码保存在当前 Mac 钥匙串 `ligong-dazi-android-signing`；两者缺一都无法为已安装用户发布可覆盖更新，请单独、安全备份。没有 Android 真机时，自动测试只能核验构建与签名，实际通知权限及安装升级仍需设备验收。
+
+以后更新安卓外壳：把 `android/twa-manifest.json` 的 `appVersionCode`、`appVersionName` 和启动链接里的 `version` 一起提高，并同步 `android/app/build.gradle` 与 `web/android-release.json`；在原签名密钥仍在这台 Mac 上的前提下运行 `bash scripts/build_android.sh`，确认签名指纹与 `web/assetlinks.json` 一致，再提交新 APK。普通网页改动不必重新打包，线上网站更新后 APK 会读取新网页。
 
 建议先用“小曾”体验已经结束的“昨晚南区羽毛球”，可以直接打开评价弹窗；将到场情况选为“没有出现”并提交高影响评价后，切换“小李”即可看到第三人复核任务。也可以发起一次新匹配并邀请“小王”，再切换账号接受邀请。
 

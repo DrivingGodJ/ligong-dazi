@@ -203,6 +203,7 @@ async def search_open_activities(
             ),
             Activity.status == "open",
             Activity.category == context.category,
+            Activity.campus == context.requester.campus,
             Activity.starts_at > utcnow(),
             Activity.starts_at >= context.starts_at - ACTIVITY_START_TOLERANCE,
             Activity.starts_at <= context.starts_at + ACTIVITY_START_TOLERANCE,
@@ -260,6 +261,7 @@ async def search_available_users(
         User.id != context.requester.id,
         User.is_active.is_(True),
         User.university == context.requester.university,
+        User.campus == context.requester.campus,
         User.credit_score >= personalization.min_credit,
     ]
     if blocked_ids:

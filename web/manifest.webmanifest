@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "理工搭子局",
+  "short_name": "搭子局",
+  "description": "本校区约活动、找搭子",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#14111b",
+  "theme_color": "#6436c8",
+  "icons": [
+    {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}
+  ]
+}

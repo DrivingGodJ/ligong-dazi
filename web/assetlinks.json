@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "app.zeabur.ligongdazi",
+      "sha256_cert_fingerprints": [
+        "D7:14:D5:27:DB:4A:05:10:FD:82:75:0E:41:0F:1B:0E:4C:2E:B2:59:11:66:34:59:61:36:EB:7D:7E:D8:45:38"
+      ]
+    }
+  }
+]

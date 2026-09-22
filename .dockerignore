@@ -8,5 +8,6 @@ __pycache__
 .DS_Store
 data
 tests
+android
 *.db
 *.sqlite3

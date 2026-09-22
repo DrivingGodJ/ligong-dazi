@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     ai_fallback_enabled: bool = True
     config_file_path: str = ".env"
     activity_photo_directory: str = "data/activity_photos"
+    push_key_file_path: str = "data/vapid_private.pem"
     activity_photo_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
 
     @model_validator(mode="after")

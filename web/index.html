@@ -11,8 +11,10 @@
     <meta name="theme-color" content="#14111b" media="(prefers-color-scheme: dark)" />
     <title>理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-    <link rel="stylesheet" href="/static/styles.css?v=13" />
-    <script src="/static/app.js?v=13" defer></script>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/static/icon-192.png" />
+    <link rel="stylesheet" href="/static/styles.css?v=14" />
+    <script src="/static/app.js?v=14" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -32,22 +34,9 @@
         </span>
       </a>
 
-      <nav id="main-nav" class="main-nav is-hidden" aria-label="主要功能">
-        <button class="nav-button is-active" type="button" data-tab="match">找搭子</button>
-        <button class="nav-button" type="button" data-tab="square">活动广场</button>
-        <button class="nav-button" type="button" data-tab="invitations">
-          收到的邀请
-          <span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span>
-        </button>
-        <button class="nav-button" type="button" data-tab="activities">
-          我的活动
-          <span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span>
-        </button>
-        <button class="nav-button" type="button" data-tab="profile">我的画像</button>
-      </nav>
-
       <div id="account-area" class="account-area is-hidden">
         <span id="account-name" class="account-name"></span>
+        <button id="notification-button" type="button" class="notification-trigger" aria-label="查看消息">🔔<span id="notification-badge" class="notification-count is-hidden">0</span></button>
       </div>
     </header>
 
@@ -121,6 +110,15 @@
           </div>
 
           <div id="register-panel" class="is-hidden" role="tabpanel" aria-labelledby="register-tab">
+            <div id="ios-install-guide" class="install-guide is-hidden">
+              <strong>先把搭子局放上 iPhone 桌面</strong>
+              <p>请用 Safari 打开本站，点分享 →「添加到主屏幕」。之后从桌面图标进入并允许通知，才可能收到活动提醒。先注册也可以，消息会留在站内。</p>
+            </div>
+            <div id="android-install-guide" class="install-guide is-hidden">
+              <strong>安卓可以安装搭子局</strong>
+              <p>推荐安装官方 APK，登录后在「我的画像」打开通知。安装更新时系统会请你确认。</p>
+              <a id="android-download-link" class="button button-quiet is-hidden" href="/downloads/ligong-dazi.apk">下载安卓 APK</a>
+            </div>
             <form id="register-form" class="form-stack">
               <div class="onboarding-progress" aria-label="注册进度">
                 <span class="is-active" data-register-dot="account"><b>1</b>账号</span>
@@ -372,6 +370,9 @@
                     <small id="confirm-location-error" class="confirmation-error is-hidden" role="alert">先填写地点再创建活动；或选择加入现有活动。</small>
                   </label>
                   <div class="confirm-actions">
+                    <label class="join-policy-select" for="match-join-policy">新活动如何加入
+                      <select id="match-join-policy"><option value="open">可自由加入</option><option value="approval">申请后全员同意</option></select>
+                    </label>
                     <button id="create-solo-button" class="button button-quiet" type="button">先发布，等人加入</button>
                     <button id="confirm-match-button" class="button button-accent" type="button">确认并执行</button>
                   </div>
@@ -453,6 +454,11 @@
             <button class="filter-chip" type="button" data-activity-filter="review">待评价</button>
             <button class="filter-chip" type="button" data-activity-filter="history">过去的</button>
           </div>
+          <section id="applications-section" class="applications-section is-hidden" aria-labelledby="applications-heading">
+            <h2 id="applications-heading">等你点头的入局申请</h2>
+            <p>每位现有成员都同意后，新搭子才正式加入。点昵称可以先看看档案。</p>
+            <div id="applications-list" class="list-surface"></div>
+          </section>
           <div id="activity-list" class="list-surface"></div>
 
           <section id="peer-review-section" class="peer-review-section is-hidden" aria-labelledby="peer-review-heading">
@@ -489,6 +495,12 @@
               <small id="ai-summary-cooldown">每 5 分钟可以重新总结一次</small>
             </div>
             <button id="generate-summary-button" class="button button-accent" type="button">让 AI 总结我</button>
+          </section>
+          <section class="notification-settings" aria-labelledby="notification-settings-heading">
+            <h2 id="notification-settings-heading">活动提醒</h2>
+            <p id="push-status">邀请和活动消息会保存在站内；手机弹窗需另外授权。</p>
+            <button id="enable-push-button" class="button button-primary" type="button">打开手机通知</button>
+            <a id="profile-apk-link" class="button button-quiet is-hidden" href="/downloads/ligong-dazi.apk">下载／更新安卓应用</a>
           </section>
 
           <form id="profile-form" class="profile-form">
@@ -585,6 +597,23 @@
         </section>
       </section>
     </main>
+
+    <nav id="main-nav" class="main-nav is-hidden" aria-label="主要功能">
+      <button class="nav-button is-active" type="button" data-tab="match"><span aria-hidden="true">✦</span>找搭子</button>
+      <button class="nav-button" type="button" data-tab="square"><span aria-hidden="true">▦</span>活动广场</button>
+      <button class="nav-button" type="button" data-tab="invitations"><span aria-hidden="true">✉</span>邀请<span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span></button>
+      <button class="nav-button" type="button" data-tab="activities"><span aria-hidden="true">◷</span>我的活动<span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span></button>
+      <button class="nav-button" type="button" data-tab="profile"><span aria-hidden="true">☺</span>我的画像</button>
+    </nav>
+
+    <dialog id="notifications-dialog" class="modal-card notification-dialog">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="notifications-dialog" aria-label="关闭消息">×</button>
+        <h2>我的消息</h2>
+        <p>就算手机没有开启通知，邀请、申请和提醒也会留在这里。</p>
+        <div id="notifications-list" class="list-surface"></div>
+      </div>
+    </dialog>
 
     <dialog id="leave-dialog" class="modal-card">
       <form method="dialog" class="modal-shell">

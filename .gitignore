@@ -11,6 +11,17 @@ __pycache__/
 *.db
 *.sqlite3
 data/
+android/android.keystore
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app-release-unsigned.apk
+android/app-release-aligned.apk
+android/app-release-unsigned-aligned.apk
+android/app-release-signed.apk
+android/app-release-bundle.aab
+web/downloads/*.idsig
 htmlcov/
 .coverage
 coverage.xml

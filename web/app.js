@@ -17,6 +17,7 @@ const state = {
   timeVotes: [],
   photoObjectUrls: [],
   peerTasks: [],
+  applications: [],
   runningTimer: null,
   summaryTimer: null,
   toastTimer: null,
@@ -33,6 +34,12 @@ const elements = {
   authView: document.querySelector("#auth-view"),
   appView: document.querySelector("#app-view"),
   mainNav: document.querySelector("#main-nav"),
+  notificationButton: document.querySelector("#notification-button"),
+  notificationBadge: document.querySelector("#notification-badge"),
+  notificationsDialog: document.querySelector("#notifications-dialog"),
+  notificationsList: document.querySelector("#notifications-list"),
+  applicationsSection: document.querySelector("#applications-section"),
+  applicationsList: document.querySelector("#applications-list"),
   accountArea: document.querySelector("#account-area"),
   accountName: document.querySelector("#account-name"),
   authError: document.querySelector("#auth-error"),
@@ -233,7 +240,13 @@ function switchAuthPanel(panel) {
   document.querySelector("#login-tab").setAttribute("aria-selected", String(loginActive));
   document.querySelector("#register-tab").setAttribute("aria-selected", String(!loginActive));
   hideInlineError(elements.authError);
-  if (!loginActive) showRegisterStep("account");
+  if (!loginActive) {
+    showRegisterStep("account");
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const android = /Android/i.test(navigator.userAgent);
+    document.querySelector("#ios-install-guide").classList.toggle("is-hidden", !ios || window.matchMedia("(display-mode: standalone)").matches);
+    document.querySelector("#android-install-guide").classList.toggle("is-hidden", !android);
+  }
 }
 
 function showRegisterStep(step) {
@@ -261,6 +274,7 @@ function continueRegistration() {
 }
 
 function showAuthenticatedShell() {
+  document.body.classList.add("has-app");
   elements.authView.classList.add("is-hidden");
   elements.appView.classList.remove("is-hidden");
   elements.mainNav.classList.remove("is-hidden");
@@ -270,16 +284,29 @@ function showAuthenticatedShell() {
   updatePeopleNeededOutput();
   loadInvitations(true);
   loadActivities(true);
+  loadNotifications();
+  refreshPushStatus();
 }
 
 function showAuthShell() {
+  document.body.classList.remove("has-app");
   elements.authView.classList.remove("is-hidden");
   elements.appView.classList.add("is-hidden");
   elements.mainNav.classList.add("is-hidden");
   elements.accountArea.classList.add("is-hidden");
 }
 
-function logout(showMessage = true) {
+async function logout(showMessage = true) {
+  if ("serviceWorker" in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      const subscription = await registration?.pushManager?.getSubscription();
+      if (subscription) {
+        if (showMessage && state.token) await api(`/push/subscriptions?endpoint=${encodeURIComponent(subscription.endpoint)}`, {method: "DELETE"});
+        await subscription.unsubscribe();
+      }
+    } catch { /* Local sign-out still completes even if push is unavailable. */ }
+  }
   window.clearTimeout(state.profileSaveTimer);
   state.profileEditRevision += 1;
   state.token = null;
@@ -312,7 +339,7 @@ async function handleLogin(event) {
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
     await loadCurrentUser();
-    switchTab("match");
+    switchTab(state.user.campus ? "match" : "profile");
   } catch (error) {
     showInlineError(elements.authError, error.message);
   } finally {
@@ -357,7 +384,7 @@ async function handleRegister(event) {
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
     await loadCurrentUser();
-    switchTab("match");
+    switchTab(state.user.campus ? "match" : "profile");
     showToast("画像已就位，去发起第一场搭子局吧");
   } catch (error) {
     showInlineError(elements.authError, error.message);
@@ -367,6 +394,10 @@ async function handleRegister(event) {
 }
 
 function switchTab(tabName) {
+  if (state.user && !["南京", "江阴"].includes(state.user.campus) && tabName !== "profile") {
+    tabName = "profile";
+    showToast("先选择南京或江阴校区，才能查看活动和搭子");
+  }
   document.querySelectorAll(".nav-button[data-tab]").forEach((button) => {
     const active = button.dataset.tab === tabName;
     button.classList.toggle("is-active", active);
@@ -379,6 +410,7 @@ function switchTab(tabName) {
   if (tabName === "activities") loadActivities();
   if (tabName === "square") loadSquare(false);
   if (tabName === "match" && !state.preview) loadAgentMode();
+  if (tabName === "invitations" || tabName === "activities") loadNotifications();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -809,11 +841,14 @@ async function confirmMatch(createSoloActivity = false) {
         existing_activity_id: createSoloActivity ? null : state.selectedActivity,
         create_solo_activity: createSoloActivity,
         location: joiningExisting ? null : location,
+        join_policy: document.querySelector("#match-join-policy").value,
       }),
     });
     elements.successTitle.textContent =
-      result.status === "joined" ? "已加入活动" : createSoloActivity ? "活动已发布" : "搭子局已创建";
-    elements.successCopy.textContent = createSoloActivity
+      result.status === "applied" ? "申请已送出" : result.status === "joined" ? "已加入活动" : createSoloActivity ? "活动已发布" : "搭子局已创建";
+    elements.successCopy.textContent = result.status === "applied"
+      ? `正在等待“${result.activity.title}”的现有成员逐一同意，消息会在站内提醒你。`
+      : createSoloActivity
       ? `“${result.activity.title}”现在由你先占一席，其他同学可以在匹配时加入。`
       : result.invitations.length
         ? `“${result.activity.title}”已创建，并向 ${result.invitations.length} 位候选发送邀请。`
@@ -892,12 +927,15 @@ function renderSquare() {
         .join("");
       const action = item.joined
         ? `<button class="button button-quiet" type="button" disabled>已经加入</button>`
+        : item.application_status === "pending"
+          ? `<button class="button button-quiet" type="button" disabled>申请等待全员同意</button>`
         : item.joinable
-          ? `<button class="button button-primary" type="button" data-join-square="${escapeHtml(activity.id)}">加入这场</button>`
+          ? `<button class="button button-primary" type="button" data-join-square="${escapeHtml(activity.id)}">${activity.join_policy === "approval" ? "申请加入" : "加入这场"}</button>`
           : `<button class="button button-quiet" type="button" disabled>${escapeHtml(item.join_reason || "暂不能加入")}</button>`;
       return `<article class="square-card">
         <div class="square-card-top"><span class="activity-role">${escapeHtml(activity.category)}</span><span class="square-score">适合度 ${escapeHtml(item.recommendation_score)}</span></div>
         ${activity.same_gender_only ? `<span class="same-gender-tag">仅同性加入</span>` : ""}
+        <span class="same-gender-tag">${activity.join_policy === "approval" ? "入局需全员同意" : "可自由加入"}</span>
         <h2>${escapeHtml(activity.title)}</h2>
         <p class="square-time">${escapeHtml(formatDate(activity.starts_at))}</p>
         <p class="square-location">${escapeHtml(activity.location)} · ${activity.participant_count}/${activity.capacity} 人</p>
@@ -911,7 +949,7 @@ function renderSquare() {
 }
 
 async function joinSquareActivity(button) {
-  setButtonLoading(button, true, "正在加入…");
+  setButtonLoading(button, true, "正在处理…");
   try {
     const result = await api(`/activities/${button.dataset.joinSquare}/join`, { method: "POST" });
     showToast(result.message);
@@ -1028,6 +1066,7 @@ async function loadActivities(silent = false) {
     elements.activityBadge.classList.toggle("is-hidden", reviewCount === 0);
     renderActivities();
     renderPeerReviewTasks();
+    await loadApplications();
   } catch (error) {
     if (!silent) elements.activityList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
   }
@@ -1095,6 +1134,7 @@ function renderActivities() {
           <p class="activity-meta"><b>${escapeHtml(formatDate(activity.starts_at))}</b><span>${escapeHtml(activity.location)}</span><span>${escapeHtml(activity.category)} · ${activity.participant_count}/${activity.capacity} 人</span></p>
           ${activityGenderSummary(activity)}
           ${activity.same_gender_only ? `<span class="same-gender-tag">仅同性加入</span>` : ""}
+          <span class="same-gender-tag">${activity.join_policy === "approval" ? "入局需全员同意" : "可自由加入"}</span>
           ${policy}
           ${item.needs_feedback ? `<div class="review-callout"><strong>趁记忆还热，给搭子留一句真实反馈</strong><span>审核 Agent 会先检查，不会直接凭一条评价重罚。</span></div>` : ""}
           <div class="activity-actions">${feedbackActions}${activityTools}${leaveAction}</div>
@@ -1204,6 +1244,120 @@ function renderTimeVotes() {
       </article>`;
     })
     .join("");
+}
+
+async function loadApplications() {
+  const upcoming = state.activities.filter((item) => item.membership_status === "confirmed" && item.activity.status === "open" && new Date(item.activity.starts_at).getTime() > Date.now());
+  const results = await Promise.allSettled(upcoming.map((item) => api(`/activities/${item.activity.id}/applications`)));
+  state.applications = results.flatMap((result, index) => result.status === "fulfilled"
+    ? result.value.map((application) => ({ ...application, activityTitle: upcoming[index].activity.title })) : []);
+  elements.applicationsSection.classList.toggle("is-hidden", state.applications.length === 0);
+  elements.applicationsList.innerHTML = state.applications.map((application) => `<article class="list-card">
+    <div><strong>${escapeHtml(application.activityTitle)}</strong>
+      <p><button class="button button-quiet" type="button" data-user-profile="${escapeHtml(application.applicant.id)}">查看 ${escapeHtml(application.applicant.display_name)} 的档案</button></p>
+      <small>已有 ${application.approvals}/${application.required_approvals} 位同意；必须全员同意才会加入。</small></div>
+    ${application.my_decision
+      ? `<span class="status-label is-success">你已同意，等其他人</span>`
+      : `<div class="list-card-actions"><button class="button button-quiet" data-application-id="${escapeHtml(application.id)}" data-application-decision="rejected">不同意</button>
+         <button class="button button-primary" data-application-id="${escapeHtml(application.id)}" data-application-decision="approved">同意加入</button></div>`}
+  </article>`).join("");
+}
+
+async function respondApplication(button) {
+  const application = state.applications.find((item) => item.id === button.dataset.applicationId);
+  if (!application) return;
+  setButtonLoading(button, true, "正在表态…");
+  try {
+    await api(`/activities/${application.activity_id}/applications/${application.id}/respond`, {
+      method: "POST", body: JSON.stringify({ decision: button.dataset.applicationDecision }),
+    });
+    showToast(button.dataset.applicationDecision === "approved" ? "已同意，等其余成员表态" : "已拒绝申请");
+    await Promise.all([loadApplications(), loadSquare(false), loadNotifications()]);
+  } catch (error) { showToast(error.message); setButtonLoading(button, false); }
+}
+
+async function loadNotifications() {
+  if (!state.token) return;
+  try {
+    const notifications = await api("/notifications");
+    const unread = notifications.filter((item) => !item.read_at).length;
+    elements.notificationBadge.textContent = String(unread);
+    elements.notificationBadge.classList.toggle("is-hidden", unread === 0);
+    elements.notificationsList.innerHTML = notifications.length ? notifications.map((item) => `<article class="notification-item ${item.read_at ? "" : "is-unread"}">
+      <strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p>
+      <button type="button" class="button button-quiet" data-notification-id="${escapeHtml(item.id)}" data-notification-url="${escapeHtml(item.url)}">查看详情</button>
+    </article>`).join("") : `<div class="empty-list">暂时没有新消息。下一次搭子动态会在这里出现。</div>`;
+  } catch { /* A failed refresh must not interrupt the primary task. */ }
+}
+
+function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+async function refreshPushStatus() {
+  const status = document.querySelector("#push-status");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    status.textContent = "当前浏览器不支持手机推送；站内消息仍可查看。";
+    return;
+  }
+  if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
+    status.textContent = "iPhone 请先在 Safari 点分享 → 添加到主屏幕，再从桌面打开并点下方按钮授权。";
+    return;
+  }
+  status.textContent = Notification.permission === "granted" ? "手机通知已授权；邀请和活动动态将尝试送达。" : "点下方按钮授权手机通知；站内消息始终可用。";
+}
+
+function decodeVapidKey(value) {
+  const padded = (value + "=".repeat((4 - value.length % 4) % 4)).replaceAll("-", "+").replaceAll("_", "/");
+  return Uint8Array.from(atob(padded), (letter) => letter.charCodeAt(0));
+}
+
+async function enablePush() {
+  const button = document.querySelector("#enable-push-button");
+  if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
+    showToast("请用 Safari 添加到主屏幕，然后从桌面打开搭子局");
+    return;
+  }
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    showToast("当前浏览器不支持推送，请使用站内消息");
+    return;
+  }
+  setButtonLoading(button, true, "正在连接通知…");
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") throw new Error("暂未获得通知权限，可在系统设置中重新允许");
+    const registration = await navigator.serviceWorker.ready;
+    const { public_key: publicKey } = await api("/push/public-key");
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true, applicationServerKey: decodeVapidKey(publicKey),
+    });
+    const json = subscription.toJSON();
+    await api("/push/subscriptions", {
+      method: "POST", body: JSON.stringify({endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth}),
+    });
+    showToast("手机通知已打开！");
+    await refreshPushStatus();
+  } catch (error) { showToast(error.message); }
+  finally { setButtonLoading(button, false); }
+}
+
+async function checkAndroidRelease() {
+  if (!/Android/i.test(navigator.userAgent)) return;
+  try {
+    const response = await fetch("/api/v1/app/version", {cache: "no-store"});
+    if (!response.ok) return;
+    const release = await response.json();
+    if (!release.available) return;
+    document.querySelectorAll("#android-download-link, #profile-apk-link").forEach((link) => {
+      link.href = release.download_url;
+      link.classList.remove("is-hidden");
+    });
+    const installedVersion = Number(localStorage.getItem("dazi_android_app_version") || 0);
+    if (installedVersion && release.version_code > installedVersion) {
+      document.querySelector("#profile-apk-link").textContent = `有新版 ${release.version_name}，点此下载安装`;
+      if (sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
+        showToast("安卓应用有新版本，到我的画像下载更新");
+        sessionStorage.setItem("dazi_android_notice", String(release.version_code));
+      }
+    }
+  } catch { /* Download link remains hidden until a release is available. */ }
 }
 
 async function submitTimeVote(event) {
@@ -1821,6 +1975,31 @@ function bindEvents() {
   document.querySelector("#register-next").addEventListener("click", continueRegistration);
   document.querySelector("#register-back").addEventListener("click", () => showRegisterStep("account"));
   document.querySelector("#logout-button").addEventListener("click", () => logout());
+  elements.notificationButton.addEventListener("click", async () => {
+    await loadNotifications();
+    elements.notificationsDialog.showModal();
+  });
+  elements.notificationsList.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-notification-id]");
+    if (!button) return;
+    try { await api(`/notifications/${button.dataset.notificationId}/read`, {method: "POST"}); }
+    catch (error) { showToast(error.message); return; }
+    elements.notificationsDialog.close();
+    await loadNotifications();
+    const tab = new URL(button.dataset.notificationUrl, window.location.origin).searchParams.get("tab");
+    if (tab) switchTab(tab);
+  });
+  elements.applicationsList.addEventListener("click", (event) => {
+    const profileButton = event.target.closest("[data-user-profile]");
+    if (profileButton) { openUserProfile(profileButton.dataset.userProfile); return; }
+    const decisionButton = event.target.closest("[data-application-id]");
+    if (decisionButton) respondApplication(decisionButton);
+  });
+  document.querySelector("#enable-push-button").addEventListener("click", enablePush);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.token) loadNotifications();
+    if (!document.hidden) checkAndroidRelease();
+  });
 
   document.querySelectorAll(".demo-account").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1985,6 +2164,14 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+  }
+  const launch = new URLSearchParams(window.location.search);
+  if (launch.get("source") === "android-app" && /^\d+$/.test(launch.get("version") || "")) {
+    localStorage.setItem("dazi_android_app_version", launch.get("version"));
+  }
+  checkAndroidRelease();
   initializeDates();
   elements.confirmButton.disabled = true;
   loadAgentMode();
@@ -1994,6 +2181,9 @@ async function initialize() {
   }
   try {
     await loadCurrentUser();
+    const initialTab = launch.get("tab");
+    if (initialTab && ["match", "square", "invitations", "activities", "profile"].includes(initialTab)) switchTab(initialTab);
+    else if (!["南京", "江阴"].includes(state.user.campus)) switchTab("profile");
   } catch {
     logout(false);
   }

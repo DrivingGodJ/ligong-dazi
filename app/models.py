@@ -86,13 +86,9 @@ class User(Base, TimestampMixin):
     preferred_group_max: Mapped[int] = mapped_column(Integer, default=6)
     credit_score: Mapped[int] = mapped_column(Integer, default=100, index=True)
     hidden_profile: Mapped[dict] = mapped_column(JSON, default=dict)
-    hidden_profile_updated_at: Mapped[datetime | None] = mapped_column(
-        UTCDateTime(), nullable=True
-    )
+    hidden_profile_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_summary_generated_at: Mapped[datetime | None] = mapped_column(
-        UTCDateTime(), nullable=True
-    )
+    ai_summary_generated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
@@ -111,6 +107,8 @@ class Activity(Base, TimestampMixin):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    campus: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    join_policy: Mapped[str] = mapped_column(String(20), default="open")
     title: Mapped[str] = mapped_column(String(120))
     category: Mapped[str] = mapped_column(String(50), index=True)
     starts_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
@@ -140,6 +138,61 @@ class ActivityMember(Base):
     joined_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     left_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     leave_penalty: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class JoinApplication(Base):
+    __tablename__ = "join_applications"
+    __table_args__ = (UniqueConstraint("activity_id", "applicant_id", name="uq_join_applicant"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    activity_id: Mapped[str] = mapped_column(
+        ForeignKey("activities.id", ondelete="CASCADE"), index=True
+    )
+    applicant_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class JoinApproval(Base):
+    __tablename__ = "join_approvals"
+    __table_args__ = (UniqueConstraint("application_id", "member_id", name="uq_join_approval"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    application_id: Mapped[str] = mapped_column(
+        ForeignKey("join_applications.id", ondelete="CASCADE"), index=True
+    )
+    member_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    decision: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("user_id", "event_key", name="uq_notification_event"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    event_key: Mapped[str] = mapped_column(String(180))
+    kind: Mapped[str] = mapped_column(String(40))
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(String(300))
+    url: Mapped[str] = mapped_column(String(255), default="/")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    pushed_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    push_attempts: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(Text)
+    auth: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class ActivityPhoto(Base):
@@ -299,9 +352,7 @@ class Feedback(Base):
     skill_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
     personality_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
     incident_tags: Mapped[list[str]] = mapped_column(JSON, default=list)
-    moderation_status: Mapped[str] = mapped_column(
-        String(40), default="reviewing", index=True
-    )
+    moderation_status: Mapped[str] = mapped_column(String(40), default="reviewing", index=True)
     ai_authenticity: Mapped[float] = mapped_column(Float, default=0.5)
     ai_malicious_risk: Mapped[float] = mapped_column(Float, default=0.0)
     ai_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

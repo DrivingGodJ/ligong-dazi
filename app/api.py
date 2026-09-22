@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import jwt
@@ -41,9 +42,13 @@ from app.models import (
     CreditEvent,
     Feedback,
     Invitation,
+    JoinApplication,
+    JoinApproval,
     MatchCandidate,
     MatchRequest,
+    Notification,
     PeerFeedbackReview,
+    PushSubscription,
     Reminder,
     SystemEvent,
     User,
@@ -51,6 +56,7 @@ from app.models import (
     new_id,
     utcnow,
 )
+from app.notifications import enqueue_notification
 from app.post_activity import (
     apply_moderation_decision,
     calculate_leave_penalty,
@@ -81,17 +87,21 @@ from app.schemas import (
     InvitationInboxItem,
     InvitationPublic,
     InvitationRespondRequest,
+    JoinApplicationDecision,
+    JoinApplicationPublic,
     LoginRequest,
     MatchConfirmRequest,
     MatchConfirmResponse,
     MatchPreviewRequest,
     MatchPreviewResponse,
     MyActivityItem,
+    NotificationPublic,
     PeerReviewCreate,
     PeerReviewResult,
     PeerReviewTask,
     PersonalizationReport,
     ProfileSummaryResponse,
+    PushSubscriptionRequest,
     RegisterRequest,
     TokenResponse,
     ToolDefinition,
@@ -146,6 +156,12 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def ensure_campus(user: User) -> str:
+    if user.campus not in {"南京", "江阴"}:
+        raise HTTPException(status_code=403, detail="请先在我的画像中选择南京或江阴校区")
+    return user.campus
+
+
 def normalized_gender(value: str) -> str:
     return value if value in {"male", "female", "undisclosed"} else "undisclosed"
 
@@ -183,6 +199,8 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
     return ActivityPublic(
         id=activity.id,
         owner_id=activity.owner_id,
+        campus=activity.campus,
+        join_policy=activity.join_policy,
         title=activity.title,
         category=activity.category,
         starts_at=activity.starts_at,
@@ -201,6 +219,8 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
 async def activity_join_block_reason(
     session: AsyncSession, activity: Activity, user: User
 ) -> str | None:
+    if activity.campus != ensure_campus(user):
+        return "只能加入本校区的活动"
     if not activity.same_gender_only or user.id == activity.owner_id:
         return None
     owner_gender = await session.scalar(select(User.gender).where(User.id == activity.owner_id))
@@ -222,9 +242,7 @@ def system_profile_public(user: User) -> UserSystemProfile:
         attendance_signals=learned.get("attendance_signals") or {},
         incident_signals=learned.get("incident_signals") or {},
         review_integrity={
-            "supported_feedback_count": int(
-                review_integrity.get("supported_feedback_count") or 0
-            ),
+            "supported_feedback_count": int(review_integrity.get("supported_feedback_count") or 0),
             "unsupported_serious_feedback_count": int(
                 review_integrity.get("unsupported_serious_feedback_count") or 0
             ),
@@ -245,6 +263,106 @@ async def confirmed_membership(
             ActivityMember.user_id == user_id,
             ActivityMember.status == "confirmed",
         )
+    )
+
+
+async def activity_member_ids(session: AsyncSession, activity_id: str) -> set[str]:
+    return set(
+        (
+            await session.scalars(
+                select(ActivityMember.user_id).where(
+                    ActivityMember.activity_id == activity_id, ActivityMember.status == "confirmed"
+                )
+            )
+        ).all()
+    )
+
+
+async def apply_to_activity(
+    session: AsyncSession, activity: Activity, user: User
+) -> JoinApplication:
+    application = await session.scalar(
+        select(JoinApplication).where(
+            JoinApplication.activity_id == activity.id, JoinApplication.applicant_id == user.id
+        )
+    )
+    if application and application.status == "pending":
+        return application
+    if application and application.status == "approved":
+        raise HTTPException(status_code=409, detail="你已经加入这场活动")
+    if application is None:
+        application = JoinApplication(activity_id=activity.id, applicant_id=user.id)
+        session.add(application)
+    else:
+        await session.execute(
+            delete(JoinApproval).where(JoinApproval.application_id == application.id)
+        )
+        application.status = "pending"
+        application.resolved_at = None
+        application.created_at = utcnow()
+    await session.flush()
+    for member_id in await activity_member_ids(session, activity.id):
+        await enqueue_notification(
+            session,
+            member_id,
+            f"join_application:{application.id}:{application.created_at.isoformat()}",
+            "join_application",
+            "有人想加入你们的活动",
+            f"{user.display_name}申请加入“{activity.title}”，查看档案后请表态。",
+            "/?tab=activities",
+        )
+    return application
+
+
+async def close_pending_applications(session: AsyncSession, activity: Activity) -> None:
+    pending = list(
+        (
+            await session.scalars(
+                select(JoinApplication).where(
+                    JoinApplication.activity_id == activity.id, JoinApplication.status == "pending"
+                )
+            )
+        ).all()
+    )
+    for application in pending:
+        if application.status != "pending":
+            continue
+        application.status = "closed"
+        application.resolved_at = utcnow()
+        await enqueue_notification(
+            session,
+            application.applicant_id,
+            f"join_closed:{application.id}:{application.created_at.isoformat()}",
+            "join_closed",
+            "活动已经满员",
+            f"“{activity.title}”已满员，去广场看看别的活动吧。",
+            "/?tab=square",
+        )
+
+
+async def join_application_public(
+    session: AsyncSession, application: JoinApplication, current_user_id: str
+) -> JoinApplicationPublic:
+    applicant = await session.get(User, application.applicant_id)
+    assert applicant is not None
+    member_ids = await activity_member_ids(session, application.activity_id)
+    member_ids.discard(application.applicant_id)
+    responses = list(
+        (
+            await session.scalars(
+                select(JoinApproval).where(JoinApproval.application_id == application.id)
+            )
+        ).all()
+    )
+    return JoinApplicationPublic(
+        id=application.id,
+        activity_id=application.activity_id,
+        applicant=user_public(applicant),
+        status=application.status,
+        approvals=sum(r.decision == "approved" and r.member_id in member_ids for r in responses),
+        required_approvals=len(member_ids),
+        my_decision=next((r.decision for r in responses if r.member_id == current_user_id), None),
+        created_at=application.created_at,
     )
 
 
@@ -289,9 +407,7 @@ async def time_vote_public(
     responses = list(
         (
             await session.scalars(
-                select(ActivityTimeVoteResponse).where(
-                    ActivityTimeVoteResponse.vote_id == vote.id
-                )
+                select(ActivityTimeVoteResponse).where(ActivityTimeVoteResponse.vote_id == vote.id)
             )
         ).all()
     )
@@ -349,6 +465,8 @@ async def reschedule_activity_reminders(session: AsyncSession, activity: Activit
 async def register(
     payload: RegisterRequest, session: SessionDep, settings: SettingsDep
 ) -> TokenResponse:
+    if payload.campus not in {"南京", "江阴"}:
+        raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
     email = payload.email.lower()
     if await session.scalar(select(User.id).where(User.email == email)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该邮箱已注册")
@@ -357,7 +475,7 @@ async def register(
         password_hash=hash_password(payload.password),
         display_name=payload.display_name.strip(),
         university=payload.university.strip(),
-        campus=payload.campus.strip() if payload.campus else None,
+        campus=payload.campus,
         department=payload.department.strip() if payload.department else None,
         grade_year=payload.grade_year,
         gender=payload.gender,
@@ -398,6 +516,8 @@ async def update_me(
     session: SessionDep,
 ) -> UserMe:
     values = payload.model_dump(exclude_unset=True)
+    if "campus" in values and values["campus"] not in {"南京", "江阴"}:
+        raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
     min_group = values.get("preferred_group_min", current_user.preferred_group_min)
     max_group = values.get("preferred_group_max", current_user.preferred_group_max)
     if min_group > max_group:
@@ -407,10 +527,14 @@ async def update_me(
         )
     for field_name, value in values.items():
         if field_name == "hobby_skills":
-            value = [
-                item.model_dump() if hasattr(item, "model_dump") else item for item in value
-            ]
+            value = [item.model_dump() if hasattr(item, "model_dump") else item for item in value]
         setattr(current_user, field_name, value)
+    if values.get("campus") in {"南京", "江阴"}:
+        await session.execute(
+            update(Activity)
+            .where(Activity.owner_id == current_user.id, Activity.campus.is_(None))
+            .values(campus=values["campus"])
+        )
     if "hobby_skills" in values:
         await session.flush()
         await refresh_hidden_profile(session, current_user)
@@ -431,10 +555,8 @@ async def read_user_profile(
     blocked = await session.scalar(
         select(UserBlock.id).where(
             or_(
-                (UserBlock.blocker_id == current_user.id)
-                & (UserBlock.blocked_id == user.id),
-                (UserBlock.blocker_id == user.id)
-                & (UserBlock.blocked_id == current_user.id),
+                (UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == user.id),
+                (UserBlock.blocker_id == user.id) & (UserBlock.blocked_id == current_user.id),
             )
         )
     )
@@ -492,12 +614,13 @@ async def create_activity(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> ActivityPublic:
+    campus = ensure_campus(current_user)
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="请先在我的画像中选择男或女，才能创建仅限同性的活动",
         )
-    activity = Activity(owner_id=current_user.id, **payload.model_dump())
+    activity = Activity(owner_id=current_user.id, campus=campus, **payload.model_dump())
     session.add(activity)
     await session.flush()
     session.add(
@@ -515,11 +638,16 @@ async def create_activity(
 @router.get("/activities", response_model=list[ActivityPublic])
 async def list_activities(
     session: SessionDep,
-    _: CurrentUser,
+    current_user: CurrentUser,
     category: str | None = Query(default=None, max_length=50),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[ActivityPublic]:
-    statement = select(Activity).order_by(Activity.starts_at.asc()).limit(limit)
+    statement = (
+        select(Activity)
+        .where(Activity.campus == ensure_campus(current_user))
+        .order_by(Activity.starts_at.asc())
+        .limit(limit)
+    )
     if category:
         statement = statement.where(Activity.category == category)
     activities = list((await session.scalars(statement)).all())
@@ -537,6 +665,7 @@ async def activity_square(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=12, ge=1, le=30),
 ) -> ActivitySquarePage:
+    campus = ensure_campus(current_user)
     activities = list(
         (
             await session.scalars(
@@ -544,6 +673,7 @@ async def activity_square(
                 .where(
                     Activity.status.in_(["open", "formed"]),
                     Activity.starts_at > utcnow(),
+                    Activity.campus == campus,
                 )
                 .order_by(Activity.starts_at.asc())
             )
@@ -571,6 +701,12 @@ async def activity_square(
                 ActivityMember.user_id == current_user.id,
             )
         )
+        application_status = await session.scalar(
+            select(JoinApplication.status).where(
+                JoinApplication.activity_id == activity.id,
+                JoinApplication.applicant_id == current_user.id,
+            )
+        )
         score, reasons = activity_recommendation(current_user, activity)
         join_block_reason = await activity_join_block_reason(session, activity, current_user)
         is_full = public_activity.participant_count >= activity.capacity
@@ -578,12 +714,9 @@ async def activity_square(
             ActivitySquareItem(
                 activity=public_activity,
                 joined=membership == "confirmed",
-                joinable=(
-                    activity.status == "open"
-                    and not is_full
-                    and join_block_reason is None
-                ),
+                joinable=(activity.status == "open" and not is_full and join_block_reason is None),
                 join_reason=join_block_reason or ("已经满员" if is_full else None),
+                application_status=application_status,
                 recommendation_score=score,
                 recommendation_reasons=reasons,
             )
@@ -617,7 +750,10 @@ async def list_activity_participants(
     session: SessionDep,
 ) -> list[UserPublic]:
     activity = await session.get(Activity, activity_id)
-    if activity is None:
+    if activity is None or (
+        activity.campus != ensure_campus(current_user)
+        and await confirmed_membership(session, activity_id, current_user.id) is None
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="活动不存在")
     if activity.status not in {"open", "formed"}:
         membership = await confirmed_membership(session, activity_id, current_user.id)
@@ -646,6 +782,7 @@ async def join_activity_from_square(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> ActivityJoinResult:
+    ensure_campus(current_user)
     activity = await session.scalar(
         select(Activity).where(Activity.id == activity_id).with_for_update()
     )
@@ -678,16 +815,25 @@ async def join_activity_from_square(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="刚刚满员了，看看其他活动吧"
         )
+    if activity.join_policy == "approval":
+        await apply_to_activity(session, activity, current_user)
+        await session.commit()
+        return ActivityJoinResult(
+            activity=await activity_public(session, activity),
+            message="申请已送出，等现有搭子都同意后才会加入。",
+        )
     if membership is None:
         membership = ActivityMember(
             activity_id=activity.id,
             user_id=current_user.id,
             role="participant",
             status="confirmed",
+            joined_at=utcnow(),
         )
         session.add(membership)
     else:
         membership.status = "confirmed"
+        membership.joined_at = utcnow()
         membership.left_at = None
         membership.leave_penalty = 0
     reminder_at = activity.starts_at - timedelta(hours=1)
@@ -709,11 +855,158 @@ async def join_activity_from_square(
             )
     if member_count + 1 >= activity.capacity:
         activity.status = "formed"
+        await close_pending_applications(session, activity)
+    for member_id in await activity_member_ids(session, activity.id):
+        if member_id != current_user.id:
+            await enqueue_notification(
+                session,
+                member_id,
+                f"public_join:{activity.id}:{current_user.id}:{membership.joined_at.isoformat()}",
+                "public_join",
+                "活动迎来新搭子",
+                f"{current_user.display_name}加入了“{activity.title}”。",
+                "/?tab=activities",
+            )
     await session.commit()
     return ActivityJoinResult(
         activity=await activity_public(session, activity),
         message="加入成功，已经放进“我的活动”。",
     )
+
+
+@router.get("/activities/{activity_id}/applications", response_model=list[JoinApplicationPublic])
+async def list_join_applications(
+    activity_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[JoinApplicationPublic]:
+    activity = await session.get(Activity, activity_id)
+    if (
+        activity is None
+        or await confirmed_membership(session, activity_id, current_user.id) is None
+    ):
+        raise HTTPException(status_code=404, detail="只有活动成员能查看加入申请")
+    applications = list(
+        (
+            await session.scalars(
+                select(JoinApplication)
+                .where(
+                    JoinApplication.activity_id == activity_id, JoinApplication.status == "pending"
+                )
+                .order_by(JoinApplication.created_at)
+            )
+        ).all()
+    )
+    return [await join_application_public(session, item, current_user.id) for item in applications]
+
+
+@router.post(
+    "/activities/{activity_id}/applications/{application_id}/respond",
+    response_model=JoinApplicationPublic,
+)
+async def respond_join_application(
+    activity_id: str,
+    application_id: str,
+    payload: JoinApplicationDecision,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> JoinApplicationPublic:
+    activity = await session.scalar(
+        select(Activity).where(Activity.id == activity_id).with_for_update()
+    )
+    application = await session.scalar(
+        select(JoinApplication)
+        .where(JoinApplication.id == application_id, JoinApplication.activity_id == activity_id)
+        .with_for_update()
+    )
+    if (
+        activity is None
+        or application is None
+        or await confirmed_membership(session, activity_id, current_user.id) is None
+    ):
+        raise HTTPException(status_code=404, detail="申请不存在或你不是活动成员")
+    if application.status != "pending":
+        return await join_application_public(session, application, current_user.id)
+    if activity.status != "open" or activity.starts_at <= utcnow():
+        raise HTTPException(status_code=409, detail="活动已无法接收新成员")
+    applicant = await session.get(User, application.applicant_id)
+    if applicant is None or await activity_join_block_reason(session, activity, applicant):
+        raise HTTPException(status_code=409, detail="申请人已不符合加入条件")
+    response = await session.scalar(
+        select(JoinApproval).where(
+            JoinApproval.application_id == application.id, JoinApproval.member_id == current_user.id
+        )
+    )
+    if response is None:
+        response = JoinApproval(
+            application_id=application.id, member_id=current_user.id, decision=payload.decision
+        )
+        session.add(response)
+    else:
+        response.decision = payload.decision
+    await session.flush()
+    if payload.decision == "rejected":
+        application.status = "rejected"
+        application.resolved_at = utcnow()
+    else:
+        member_ids = await activity_member_ids(session, activity_id)
+        approved_ids = set(
+            (
+                await session.scalars(
+                    select(JoinApproval.member_id).where(
+                        JoinApproval.application_id == application.id,
+                        JoinApproval.decision == "approved",
+                    )
+                )
+            ).all()
+        )
+        if member_ids.issubset(approved_ids):
+            count = len(member_ids)
+            if count >= activity.capacity:
+                raise HTTPException(status_code=409, detail="活动刚刚满员，请刷新后再试")
+            membership = await session.scalar(
+                select(ActivityMember).where(
+                    ActivityMember.activity_id == activity_id,
+                    ActivityMember.user_id == applicant.id,
+                )
+            )
+            if membership is None:
+                session.add(ActivityMember(activity_id=activity_id, user_id=applicant.id))
+            else:
+                membership.status = "confirmed"
+                membership.left_at = None
+                membership.joined_at = utcnow()
+            application.status = "approved"
+            application.resolved_at = utcnow()
+            if count + 1 >= activity.capacity:
+                activity.status = "formed"
+                await close_pending_applications(session, activity)
+            reminder_at = activity.starts_at - timedelta(hours=1)
+            if reminder_at > utcnow():
+                session.add(
+                    Reminder(activity_id=activity.id, user_id=applicant.id, remind_at=reminder_at)
+                )
+            await enqueue_notification(
+                session,
+                applicant.id,
+                f"join_approved:{application.id}",
+                "join_approved",
+                "申请通过啦",
+                f"你已经加入“{activity.title}”！",
+                "/?tab=activities",
+            )
+    if application.status == "rejected":
+        await enqueue_notification(
+            session,
+            applicant.id,
+            f"join_rejected:{application.id}:{application.created_at.isoformat()}",
+            "join_rejected",
+            "加入申请未通过",
+            f"“{activity.title}”的申请没有通过，可以再看看其他活动。",
+            "/?tab=square",
+        )
+    await session.commit()
+    return await join_application_public(session, application, current_user.id)
 
 
 @router.get("/activities/mine", response_model=list[MyActivityItem])
@@ -927,9 +1220,7 @@ async def leave_activity(
         credit_delta=actual_delta,
         credit_score=current_user.credit_score,
         message=(
-            f"已退出活动，信用分扣除 {penalty} 分。"
-            if penalty
-            else "已退出活动，没有扣信用分。"
+            f"已退出活动，信用分扣除 {penalty} 分。" if penalty else "已退出活动，没有扣信用分。"
         ),
         activity_deleted=False,
     )
@@ -948,9 +1239,7 @@ async def export_activity_calendar(
     return Response(
         content=build_activity_ics(activity),
         media_type="text/calendar; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="activity-{activity.id}.ics"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="activity-{activity.id}.ics"'},
     )
 
 
@@ -990,9 +1279,7 @@ async def list_activity_photos(
                 uploader=user_public(uploader),
                 media_type=photo.media_type,
                 uploaded_at=photo.uploaded_at,
-                content_url=(
-                    f"/api/v1/activities/{activity_id}/photos/{photo.id}/content"
-                ),
+                content_url=(f"/api/v1/activities/{activity_id}/photos/{photo.id}/content"),
             )
         )
     return result
@@ -1162,6 +1449,17 @@ async def create_activity_time_vote(
     )
     session.add(vote)
     await session.flush()
+    for member_id in await activity_member_ids(session, activity.id):
+        if member_id != current_user.id:
+            await enqueue_notification(
+                session,
+                member_id,
+                f"time_vote:{vote.id}",
+                "time_vote",
+                "搭子提议改时间",
+                f"{current_user.display_name}想调整“{activity.title}”的时间，请看看是否同意。",
+                "/?tab=activities",
+            )
     member_count = int(
         await session.scalar(
             select(func.count(ActivityMember.id)).where(
@@ -1285,6 +1583,7 @@ async def preview_match(
     session: SessionDep,
     settings: SettingsDep,
 ) -> MatchPreviewResponse:
+    ensure_campus(current_user)
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1436,12 +1735,13 @@ async def confirm_match(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> MatchConfirmResponse:
+    ensure_campus(current_user)
     match_request = await session.scalar(
         select(MatchRequest).where(MatchRequest.id == match_request_id).with_for_update()
     )
     if match_request is None or match_request.requester_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="匹配请求不存在")
-    if match_request.status in {"confirmed", "joined"}:
+    if match_request.status in {"confirmed", "joined", "applied"}:
         return await load_confirmed_result(session, match_request)
     if match_request.status != "previewed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="当前状态不可确认")
@@ -1482,15 +1782,32 @@ async def confirm_match(
         )
         if member_count >= activity.capacity:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动人数已满")
-        session.add(
-            ActivityMember(
-                activity_id=activity.id,
-                user_id=current_user.id,
-                role="participant",
-                status="confirmed",
+        if activity.join_policy == "approval":
+            await apply_to_activity(session, activity, current_user)
+            match_request.status = "applied"
+        else:
+            session.add(
+                ActivityMember(
+                    activity_id=activity.id,
+                    user_id=current_user.id,
+                    role="participant",
+                    status="confirmed",
+                )
             )
-        )
-        match_request.status = "joined"
+            match_request.status = "joined"
+            if member_count + 1 >= activity.capacity:
+                activity.status = "formed"
+                await close_pending_applications(session, activity)
+            for member_id in await activity_member_ids(session, activity.id):
+                await enqueue_notification(
+                    session,
+                    member_id,
+                    f"public_join:{activity.id}:{current_user.id}",
+                    "public_join",
+                    "活动迎来新搭子",
+                    f"{current_user.display_name}加入了“{activity.title}”。",
+                    "/?tab=activities",
+                )
         match_request.activity_id = activity.id
         invitations: list[Invitation] = []
         write_tools = ["join_activity", "schedule_reminder"]
@@ -1520,6 +1837,18 @@ async def confirm_match(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能邀请本次推荐的用户"
             )
+        if selected_ids:
+            selected_campuses = (
+                await session.execute(
+                    select(User.id, User.campus).where(
+                        User.id.in_(selected_ids), User.is_active.is_(True)
+                    )
+                )
+            ).all()
+            if len(selected_campuses) != len(selected_ids) or any(
+                campus != ensure_campus(current_user) for _, campus in selected_campuses
+            ):
+                raise HTTPException(status_code=409, detail="候选搭子的校区发生变化，请重新匹配")
         if len(selected_ids) > match_request.people_needed:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1527,6 +1856,8 @@ async def confirm_match(
             )
         activity = Activity(
             owner_id=current_user.id,
+            campus=ensure_campus(current_user),
+            join_policy=payload.join_policy,
             title=match_request.title or f"{location}{match_request.category}搭子局",
             category=match_request.category,
             starts_at=match_request.starts_at,
@@ -1552,6 +1883,7 @@ async def confirm_match(
         invitations = []
         for invitee_id in payload.candidate_user_ids:
             invitation = Invitation(
+                id=new_id(),
                 activity_id=activity.id,
                 match_request_id=match_request.id,
                 inviter_id=current_user.id,
@@ -1561,6 +1893,15 @@ async def confirm_match(
             )
             session.add(invitation)
             invitations.append(invitation)
+            await enqueue_notification(
+                session,
+                invitee_id,
+                f"invitation:{invitation.id}",
+                "invitation",
+                "收到一份搭子邀请",
+                f"{current_user.display_name}邀请你参加“{activity.title}”。",
+                "/?tab=invitations",
+            )
         match_request.status = "confirmed"
         match_request.activity_id = activity.id
         write_tools = ["create_activity", "schedule_reminder"]
@@ -1568,7 +1909,7 @@ async def confirm_match(
             write_tools.insert(1, "invite_user")
 
     reminder_at = match_request.starts_at - timedelta(hours=1)
-    if reminder_at > utcnow():
+    if reminder_at > utcnow() and match_request.status != "applied":
         session.add(
             Reminder(
                 activity_id=activity.id,
@@ -1647,6 +1988,12 @@ async def respond_to_invitation(
         )
         if member_count >= activity.capacity:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动人数已满")
+        if activity.join_policy == "approval":
+            await apply_to_activity(session, activity, current_user)
+            invitation.status = "accepted"
+            invitation.responded_at = utcnow()
+            await session.commit()
+            return InvitationPublic.model_validate(invitation)
         session.add(
             ActivityMember(
                 activity_id=activity.id,
@@ -1666,11 +2013,99 @@ async def respond_to_invitation(
             )
         if member_count + 1 >= activity.capacity:
             activity.status = "formed"
+            await close_pending_applications(session, activity)
     invitation.status = payload.decision
     invitation.responded_at = utcnow()
     await session.commit()
     await session.refresh(invitation)
     return InvitationPublic.model_validate(invitation)
+
+
+@router.get("/notifications", response_model=list[NotificationPublic])
+async def list_notifications(
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[NotificationPublic]:
+    rows = list(
+        (
+            await session.scalars(
+                select(Notification)
+                .where(Notification.user_id == current_user.id)
+                .order_by(Notification.created_at.desc())
+                .limit(80)
+            )
+        ).all()
+    )
+    return [NotificationPublic.model_validate(item) for item in rows]
+
+
+@router.post("/notifications/{notification_id}/read", response_model=NotificationPublic)
+async def mark_notification_read(
+    notification_id: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> NotificationPublic:
+    item = await session.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == current_user.id,
+        )
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="消息不存在")
+    item.read_at = utcnow()
+    await session.commit()
+    return NotificationPublic.model_validate(item)
+
+
+@router.get("/push/public-key")
+async def read_push_public_key(request: Request) -> dict[str, str]:
+    return {"public_key": request.app.state.vapid_public_key}
+
+
+@router.post("/push/subscriptions", status_code=201)
+async def save_push_subscription(
+    payload: PushSubscriptionRequest,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> dict[str, str]:
+    endpoint_host = urlsplit(payload.endpoint).hostname or ""
+    allowed_hosts = {
+        "web.push.apple.com",
+        "fcm.googleapis.com",
+        "updates.push.services.mozilla.com",
+    }
+    if not payload.endpoint.startswith("https://") or (
+        endpoint_host not in allowed_hosts and not endpoint_host.endswith(".notify.windows.com")
+    ):
+        raise HTTPException(status_code=422, detail="推送订阅地址无效")
+    subscription = await session.scalar(
+        select(PushSubscription).where(PushSubscription.endpoint == payload.endpoint)
+    )
+    if subscription is None:
+        session.add(PushSubscription(user_id=current_user.id, **payload.model_dump()))
+    else:
+        subscription.user_id = current_user.id
+        subscription.p256dh = payload.p256dh
+        subscription.auth = payload.auth
+    await session.commit()
+    return {"status": "subscribed"}
+
+
+@router.delete("/push/subscriptions")
+async def remove_push_subscription(
+    current_user: CurrentUser,
+    session: SessionDep,
+    endpoint: str = Query(max_length=2048),
+) -> dict[str, str]:
+    await session.execute(
+        delete(PushSubscription).where(
+            PushSubscription.user_id == current_user.id,
+            PushSubscription.endpoint == endpoint,
+        )
+    )
+    await session.commit()
+    return {"status": "unsubscribed"}
 
 
 @router.get("/invitations", response_model=list[InvitationInboxItem])
