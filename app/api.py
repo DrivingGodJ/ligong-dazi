@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import delete, func, or_, select, update
@@ -22,6 +22,7 @@ from app.activity_media import (
     cleanup_expired_activity_photos,
     decode_image_data_url,
     remove_photo_file,
+    validate_image_content,
 )
 from app.agent import TOOL_CATALOG, AgentOutputError, run_matching_agent
 from app.core import (
@@ -1392,6 +1393,45 @@ async def upload_activity_photo(
     session: SessionDep,
     settings: SettingsDep,
 ) -> ActivityPhotoPublic:
+    activity = await require_photo_upload_access(activity_id, current_user, session)
+    content, media_type, extension = decode_image_data_url(
+        payload.data_url, settings.activity_photo_max_bytes
+    )
+    return await save_activity_photo(
+        activity, content, media_type, extension, current_user, session, settings
+    )
+
+
+@router.post(
+    "/activities/{activity_id}/photos/file",
+    response_model=ActivityPhotoPublic,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_activity_photo_file(
+    activity_id: str,
+    file: UploadFile,
+    current_user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> ActivityPhotoPublic:
+    activity = await require_photo_upload_access(activity_id, current_user, session)
+    try:
+        content = await file.read(settings.activity_photo_max_bytes + 1)
+        content, media_type, extension = validate_image_content(
+            content, file.content_type or "", settings.activity_photo_max_bytes
+        )
+    finally:
+        await file.close()
+    return await save_activity_photo(
+        activity, content, media_type, extension, current_user, session, settings
+    )
+
+
+async def require_photo_upload_access(
+    activity_id: str,
+    current_user: User,
+    session: AsyncSession,
+) -> Activity:
     activity = await session.get(Activity, activity_id)
     membership = await confirmed_membership(session, activity_id, current_user.id)
     if activity is None or membership is None:
@@ -1406,10 +1446,23 @@ async def upload_activity_photo(
         if await cleanup_expired_activity_photos(session):
             await session.commit()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="活动已结束，照片已清理。")
+    return activity
 
-    content, media_type, extension = decode_image_data_url(
-        payload.data_url, settings.activity_photo_max_bytes
-    )
+
+async def save_activity_photo(
+    activity: Activity,
+    content: bytes,
+    media_type: str,
+    extension: str,
+    current_user: User,
+    session: AsyncSession,
+    settings: Settings,
+) -> ActivityPhotoPublic:
+    if utcnow() >= activity.ends_at:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="活动已结束，请勿再上传照片。",
+        )
     photo_id = new_id()
     photo_directory = await asyncio.to_thread(
         lambda: Path(settings.activity_photo_directory).expanduser().resolve()
@@ -1450,7 +1503,7 @@ async def upload_activity_photo(
         uploader=user_public(current_user),
         media_type=photo.media_type,
         uploaded_at=photo.uploaded_at,
-        content_url=f"/api/v1/activities/{activity_id}/photos/{photo.id}/content",
+        content_url=f"/api/v1/activities/{activity.id}/photos/{photo.id}/content",
     )
 
 
@@ -1478,7 +1531,11 @@ async def read_activity_photo(
     photo_exists = photo is not None and await asyncio.to_thread(Path(photo.file_path).is_file)
     if photo is None or not photo_exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="照片不存在")
-    return FileResponse(photo.file_path, media_type=photo.media_type)
+    return FileResponse(
+        photo.file_path,
+        media_type=photo.media_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get(

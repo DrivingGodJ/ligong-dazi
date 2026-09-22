@@ -38,6 +38,17 @@ def decode_image_data_url(data_url: str, max_bytes: int) -> tuple[bytes, str, st
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="图片内容无法读取，请重新选择。",
         ) from exc
+    return validate_image_content(content, media_type, max_bytes)
+
+
+def validate_image_content(
+    content: bytes, media_type: str, max_bytes: int
+) -> tuple[bytes, str, str]:
+    if media_type not in IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请选择 JPG、PNG、WebP 或 GIF 图片。",
+        )
     if len(content) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,

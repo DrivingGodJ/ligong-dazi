@@ -3115,6 +3115,15 @@ a:focus-visible {
   object-fit: cover;
 }
 
+.photo-placeholder {
+  display: grid;
+  min-height: 9rem;
+  place-items: center;
+  padding: 1rem;
+  color: var(--ink-600);
+  text-align: center;
+}
+
 .activity-photo figcaption {
   padding: 0.55rem 0.7rem;
   color: var(--ink-600);

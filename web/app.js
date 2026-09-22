@@ -17,6 +17,7 @@ const state = {
   activeActivity: null,
   timeVotes: [],
   photoObjectUrls: [],
+  photoLoadGeneration: 0,
   peerTasks: [],
   applications: [],
   runningTimer: null,
@@ -1487,6 +1488,7 @@ async function respondTimeVote(button) {
 }
 
 function revokePhotoUrls() {
+  state.photoLoadGeneration += 1;
   state.photoObjectUrls.forEach((url) => URL.revokeObjectURL(url));
   state.photoObjectUrls = [];
 }
@@ -1514,32 +1516,85 @@ async function openPhotoDialog(activityId) {
 
 async function loadActivityPhotos(activityId) {
   revokePhotoUrls();
+  const generation = state.photoLoadGeneration;
   try {
     const photos = await api(`/activities/${activityId}/photos`);
+    if (generation !== state.photoLoadGeneration) return;
     if (!photos.length) {
       elements.photoList.innerHTML = `<div class="empty-list">还没有照片。接近集合时间时，拍一张周围环境给搭子看吧。</div>`;
       return;
     }
-    const cards = await Promise.all(
-      photos.map(async (photo) => {
-        const blob = await apiBlob(photo.content_url.replace(API_ROOT, ""));
-        const url = URL.createObjectURL(blob);
-        state.photoObjectUrls.push(url);
-        return `<figure class="activity-photo"><img src="${url}" alt="${escapeHtml(photo.uploader.display_name)} 上传的集合环境照片" /><figcaption>${escapeHtml(photo.uploader.display_name)} · ${escapeHtml(formatDate(photo.uploaded_at))}</figcaption></figure>`;
-      }),
-    );
-    elements.photoList.innerHTML = cards.join("");
+    elements.photoList.replaceChildren();
+    for (const photo of photos) {
+      const card = document.createElement("figure");
+      card.className = "activity-photo";
+      card.innerHTML = `<div class="photo-placeholder" role="status">照片加载中…</div><figcaption>${escapeHtml(photo.uploader.display_name)} · ${escapeHtml(formatDate(photo.uploaded_at))}</figcaption>`;
+      elements.photoList.appendChild(card);
+      loadPhotoCard(photo, card, generation);
+    }
   } catch (error) {
+    if (generation !== state.photoLoadGeneration) return;
     elements.photoList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
   }
 }
 
-function fileToDataUrl(file) {
+async function loadPhotoCard(photo, card, generation) {
+  const placeholder = card.querySelector(".photo-placeholder");
+  placeholder.textContent = "照片加载中…";
+  try {
+    const blob = await apiBlob(photo.content_url.replace(API_ROOT, ""));
+    if (generation !== state.photoLoadGeneration) return;
+    const url = URL.createObjectURL(blob);
+    state.photoObjectUrls.push(url);
+    const image = document.createElement("img");
+    image.src = url;
+    image.alt = `${photo.uploader.display_name} 上传的集合环境照片`;
+    placeholder.replaceWith(image);
+  } catch {
+    if (generation !== state.photoLoadGeneration) return;
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "button button-quiet";
+    retry.textContent = "照片加载失败，点此重试";
+    retry.addEventListener("click", () => {
+      retry.replaceWith(placeholder);
+      loadPhotoCard(photo, card, generation);
+    });
+    placeholder.replaceWith(retry);
+  }
+}
+
+function imageToCompressedBlob(file) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("照片读取失败，请重新选择"));
-    reader.readAsDataURL(file);
+    const sourceUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl);
+      reject(new Error("照片无法读取，请重新选择 JPG、PNG、WebP 或 GIF 图片"));
+    };
+    image.onload = () => {
+      URL.revokeObjectURL(sourceUrl);
+      try {
+        const longest = Math.max(image.naturalWidth, image.naturalHeight);
+        if (!longest) throw new Error("照片尺寸无效，请重新选择");
+        const scale = Math.min(1, 1600 / longest);
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("当前设备无法处理照片，请换一张试试");
+        context.fillStyle = "#fff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error("照片压缩失败，请重新选择")); return; }
+          resolve(blob);
+        }, "image/jpeg", 0.78);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    image.src = sourceUrl;
   });
 }
 
@@ -1550,16 +1605,20 @@ async function uploadActivityPhoto(event) {
   const file = elements.photoForm.elements.photo.files[0];
   const activityId = elements.photoForm.elements.activity_id.value;
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) {
-    showInlineError(elements.photoError, "单张图片不能超过 5 MB。 ");
+  if (file.size > 25 * 1024 * 1024) {
+    showInlineError(elements.photoError, "原照片不能超过 25 MB，请换一张或先在相册里缩小。 ");
     return;
   }
-  setButtonLoading(button, true, "正在上传…");
+  setButtonLoading(button, true, "正在压缩照片…");
   try {
-    const dataUrl = await fileToDataUrl(file);
-    await api(`/activities/${activityId}/photos`, {
+    const compressed = await imageToCompressedBlob(file);
+    if (compressed.size > 5 * 1024 * 1024) throw new Error("压缩后仍超过 5 MB，请换一张照片");
+    button.textContent = "正在上传…";
+    const body = new FormData();
+    body.append("file", compressed, "meeting-photo.jpg");
+    await api(`/activities/${activityId}/photos/file`, {
       method: "POST",
-      body: JSON.stringify({ data_url: dataUrl }),
+      body,
     });
     elements.photoForm.elements.photo.value = "";
     showToast("照片已同步给这场活动的搭子");
@@ -2174,6 +2233,7 @@ function bindEvents() {
     if (button) respondTimeVote(button);
   });
   elements.photoForm.addEventListener("submit", uploadActivityPhoto);
+  elements.photoDialog.addEventListener("close", revokePhotoUrls);
   elements.feedbackForm.addEventListener("submit", submitFeedback);
   elements.peerReviewList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-peer-task]");

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -11,6 +12,7 @@ ONE_PIXEL_PNG = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+ONE_PIXEL_PNG_BYTES = base64.b64decode(ONE_PIXEL_PNG.split(",", 1)[1])
 
 
 async def create_activity(client, headers, *, starts_at, capacity=3, title="南体夜跑") -> dict:
@@ -149,14 +151,40 @@ async def test_photo_window_permissions_limit_and_end_cleanup(client) -> None:
         f"/api/v1/activities/{activity['id']}/join", headers=member_headers
     )
     assert joined.status_code == 200
+    outsider_upload = await client.post(
+        f"/api/v1/activities/{activity['id']}/photos/file",
+        headers=outsider_headers,
+        files={"file": ("meeting.png", ONE_PIXEL_PNG_BYTES, "image/png")},
+    )
+    assert outsider_upload.status_code == 404
 
-    for _ in range(6):
-        uploaded = await client.post(
-            f"/api/v1/activities/{activity['id']}/photos",
-            headers=owner_headers,
-            json={"data_url": ONE_PIXEL_PNG},
-        )
+    for index in range(6):
+        if index % 2:
+            uploaded = await client.post(
+                f"/api/v1/activities/{activity['id']}/photos/file",
+                headers=owner_headers,
+                files={"file": ("meeting.png", ONE_PIXEL_PNG_BYTES, "image/png")},
+            )
+        else:
+            uploaded = await client.post(
+                f"/api/v1/activities/{activity['id']}/photos",
+                headers=owner_headers,
+                json={"data_url": ONE_PIXEL_PNG},
+            )
         assert uploaded.status_code == 201, uploaded.text
+
+    too_large = await client.post(
+        f"/api/v1/activities/{activity['id']}/photos/file",
+        headers=owner_headers,
+        files={"file": ("oversize.png", b"x" * (5 * 1024 * 1024 + 1), "image/png")},
+    )
+    assert too_large.status_code == 413
+    bad_type = await client.post(
+        f"/api/v1/activities/{activity['id']}/photos/file",
+        headers=owner_headers,
+        files={"file": ("meeting.png", ONE_PIXEL_PNG_BYTES, "text/plain")},
+    )
+    assert bad_type.status_code == 422
 
     photos = await client.get(
         f"/api/v1/activities/{activity['id']}/photos", headers=member_headers
@@ -170,6 +198,7 @@ async def test_photo_window_permissions_limit_and_end_cleanup(client) -> None:
     photo_content = await client.get(photos.json()[0]["content_url"], headers=member_headers)
     assert photo_content.status_code == 200
     assert photo_content.headers["content-type"] == "image/png"
+    assert photo_content.headers["cache-control"] == "private, no-store"
 
     app = client._transport.app  # type: ignore[attr-defined]
     async with app.state.database.session_factory() as session:
@@ -184,6 +213,10 @@ async def test_photo_window_permissions_limit_and_end_cleanup(client) -> None:
     )
     assert expired.status_code == 200
     assert expired.json() == []
+    deleted_content = await client.get(
+        photos.json()[0]["content_url"], headers=member_headers
+    )
+    assert deleted_content.status_code == 404
     async with app.state.database.session_factory() as session:
         remaining = await session.scalar(
             select(func.count(ActivityPhoto.id)).where(ActivityPhoto.activity_id == activity["id"])
