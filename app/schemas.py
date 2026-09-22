@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from app.campus import require_campus
+from app.colleges import match_college
 
 
 class ApiModel(BaseModel):
@@ -85,6 +86,16 @@ class RegisterRequest(ApiModel):
     @classmethod
     def clean_registration_lists(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+
+    @field_validator("department")
+    @classmethod
+    def select_department(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        college = match_college(value)
+        if college is None:
+            raise ValueError("请选择列表中的学院")
+        return college
 
     @field_validator("student_id")
     @classmethod

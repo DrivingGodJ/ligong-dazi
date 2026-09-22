@@ -23,6 +23,7 @@ from app.migrations import (
     ensure_sqlite_compatibility,
     migrate_activity_campuses,
     migrate_user_campuses,
+    migrate_user_colleges,
     remove_emails_from_bound_accounts,
 )
 from app.models import Base
@@ -86,6 +87,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             migrated_campuses = await migrate_user_campuses(session)
             if migrated_campuses:
                 logger.info("已将 %s 位用户的旧校区资料归一为南京或江阴", migrated_campuses)
+            migrated_colleges = await migrate_user_colleges(session)
+            if migrated_colleges:
+                logger.info("已将 %s 位用户的旧学院资料匹配到当前学院列表", migrated_colleges)
             removed_emails = await remove_emails_from_bound_accounts(session)
             if removed_emails:
                 logger.info("已移除 %s 位已绑定学号用户的旧邮箱", removed_emails)

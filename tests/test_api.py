@@ -7,6 +7,8 @@ import pytest
 from sqlalchemy import select
 
 from app.agent import AgentOutputError
+from app.colleges import COLLEGES, match_college
+from app.migrations import migrate_user_colleges
 from app.models import Activity as ActivityModel
 from app.models import ActivityMember, Feedback, User
 from app.post_activity import refresh_hidden_profile
@@ -20,7 +22,7 @@ async def update_profile(
 ) -> dict:
     profile = {
         "campus": "南区",
-        "department": "设计艺术与传媒学院",
+        "department": "设计科学与艺术学院",
         "grade_year": 3,
         "bio": "喜欢运动和摄影，守时",
         "interests": ["羽毛球", "摄影"],
@@ -71,6 +73,72 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
         json={"email": "owner@njust.edu.cn", "password": "test-password-123"},
     )
     assert login.status_code == 200
+
+
+async def test_college_choices_and_legacy_department_are_preserved(
+    client: httpx.AsyncClient,
+) -> None:
+    assert len(COLLEGES) == 23
+    assert len(set(COLLEGES)) == len(COLLEGES)
+    assert match_college("  设计艺术与传媒学院  ") == "设计科学与艺术学院"
+    assert match_college("微电子学院（集成电路学院）") == "集成电路学院（微电子学院）"
+    assert match_college("不确定的学院") is None
+    page = (await client.get("/")).text
+    script = (await client.get("/static/app.js")).text
+    assert page.count('name="department" data-college-select') == 2
+    assert all(f'"{college}"' in script for college in COLLEGES)
+
+    invalid = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "student_id": "202600001234",
+            "password": "test-password-123",
+            "display_name": "学院校验",
+            "campus": "南京",
+            "department": "随手填的学院",
+        },
+    )
+    assert invalid.status_code == 422
+
+    _, headers = await register_user(client, "college@njust.edu.cn", "学院校验")
+    selected = await client.patch(
+        "/api/v1/users/me", headers=headers, json={"department": "智能科学与技术学院"}
+    )
+    assert selected.status_code == 200
+    assert selected.json()["department"] == "智能科学与技术学院"
+    rejected = await client.patch(
+        "/api/v1/users/me", headers=headers, json={"department": "随手填的学院"}
+    )
+    assert rejected.status_code == 422
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        user = await session.scalar(
+            select(User).where(User.student_id == selected.json()["student_id"])
+        )
+        assert user is not None
+        user.department = "历史填写的旧学院"
+        await session.commit()
+    retained = await client.patch(
+        "/api/v1/users/me",
+        headers=headers,
+        json={"department": "历史填写的旧学院", "bio": "资料仍可自动保存"},
+    )
+    assert retained.status_code == 200
+    assert retained.json()["department"] == "历史填写的旧学院"
+    assert retained.json()["bio"] == "资料仍可自动保存"
+
+    async with app.state.database.session_factory() as session:
+        user = await session.scalar(
+            select(User).where(User.student_id == selected.json()["student_id"])
+        )
+        assert user is not None
+        user.department = "设计艺术与传媒学院"
+        await session.commit()
+        assert await migrate_user_colleges(session) == 1
+        await session.commit()
+    matched = await client.get("/api/v1/users/me", headers=headers)
+    assert matched.json()["department"] == "设计科学与艺术学院"
 
 
 async def test_separate_native_app_download_and_version(client: httpx.AsyncClient) -> None:
@@ -349,7 +417,7 @@ async def test_guided_registration_solo_activity_and_timed_leave(
             "display_name": "画像用户",
             "university": "南京理工大学",
             "campus": "江阴校区",
-            "department": "设计艺术与传媒学院",
+            "department": "设计科学与艺术学院",
             "grade_year": 3,
             "gender": "male",
             "bio": "喜欢有计划地参加活动",
@@ -367,7 +435,7 @@ async def test_guided_registration_solo_activity_and_timed_leave(
     assert registration.status_code == 201, registration.text
     headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
     me = await client.get("/api/v1/users/me", headers=headers)
-    assert me.json()["department"] == "设计艺术与传媒学院"
+    assert me.json()["department"] == "设计科学与艺术学院"
     assert me.json()["gender"] == "male"
     assert me.json()["interests"] == ["摄影", "羽毛球"]
     assert me.json()["hobby_skills"] == [

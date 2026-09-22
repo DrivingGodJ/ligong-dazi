@@ -4,6 +4,7 @@ from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.campus import CAMPUSES, infer_campus
+from app.colleges import match_college
 from app.models import User, new_id
 
 SQLITE_COMPATIBILITY_COLUMNS = {
@@ -92,6 +93,18 @@ async def migrate_user_campuses(session: AsyncSession) -> int:
         campus = infer_campus(user.campus, user.preferred_locations)
         if campus is not None:
             user.campus = campus
+            migrated += 1
+    return migrated
+
+
+async def migrate_user_colleges(session: AsyncSession) -> int:
+    """Map recognized old department text to the current college choices."""
+    users = list((await session.scalars(select(User).where(User.department.is_not(None)))).all())
+    migrated = 0
+    for user in users:
+        college = match_college(user.department)
+        if college is not None and college != user.department:
+            user.department = college
             migrated += 1
     return migrated
 

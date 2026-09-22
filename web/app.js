@@ -36,6 +36,20 @@ const state = {
 };
 
 const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
+const COLLEGES = Object.freeze([
+  "机械工程学院", "化学与化工学院", "电子工程与光电技术学院", "计算机科学与工程学院",
+  "经济管理学院", "能源与动力工程学院", "自动化学院", "物理学院",
+  "外国语学院", "公共事务学院", "马克思主义学院", "材料科学与工程学院",
+  "环境与生物工程学院", "设计科学与艺术学院", "钱学森学院", "知识产权学院",
+  "中法工程师学院", "数学与统计学院", "集成电路学院（微电子学院）", "网络空间安全学院",
+  "智能科学与技术学院", "新能源学院", "安全科学与工程学院（应急管理学院）",
+]);
+
+function populateCollegeSelects() {
+  document.querySelectorAll("[data-college-select]").forEach((select) => {
+    COLLEGES.forEach((college) => select.add(new Option(college, college)));
+  });
+}
 
 const elements = {
   authView: document.querySelector("#auth-view"),
@@ -96,6 +110,7 @@ const elements = {
   profileStatus: document.querySelector("#profile-status"),
   profileRetry: document.querySelector("#profile-retry"),
   campusMigrationNote: document.querySelector("#campus-migration-note"),
+  legacyDepartmentNote: document.querySelector("#legacy-department-note"),
   aiSummaryCopy: document.querySelector("#ai-summary-copy"),
   aiSummaryCooldown: document.querySelector("#ai-summary-cooldown"),
   generateSummaryButton: document.querySelector("#generate-summary-button"),
@@ -1868,7 +1883,19 @@ function populateProfileForm() {
   elements.campusMigrationNote.textContent = form.campus.value
     ? ""
     : `旧资料${state.user.campus ? `“${state.user.campus}”` : ""}无法确定属于哪个校区，请选择南京或江阴；选择后会自动保存。`;
-  form.department.value = state.user.department || "";
+  form.department.querySelector("[data-legacy-college]")?.remove();
+  const currentDepartment = state.user.department || "";
+  const legacyDepartment = currentDepartment && !COLLEGES.includes(currentDepartment);
+  if (legacyDepartment) {
+    const option = new Option(`原填写：${currentDepartment}`, currentDepartment);
+    option.dataset.legacyCollege = "";
+    form.department.add(option);
+  }
+  form.department.value = currentDepartment;
+  elements.legacyDepartmentNote.classList.toggle("is-hidden", !legacyDepartment);
+  elements.legacyDepartmentNote.textContent = legacyDepartment
+    ? "原填写的学院暂时保留。你可以从列表中选择新名称，其他资料会继续自动保存。"
+    : "";
   form.grade_year.value = state.user.grade_year || "";
   form.gender.value = state.user.gender || "undisclosed";
   form.bio.value = state.user.bio || "";
@@ -2276,6 +2303,9 @@ function bindEvents() {
     if (event.target.name === "campus") {
       elements.campusMigrationNote.classList.toggle("is-hidden", Boolean(event.target.value));
     }
+    if (event.target.name === "department" && COLLEGES.includes(event.target.value)) {
+      elements.legacyDepartmentNote.classList.add("is-hidden");
+    }
     queueProfileSave(true);
   });
   elements.profileRetry.addEventListener("click", () => queueProfileSave(true));
@@ -2337,6 +2367,7 @@ function bindEvents() {
 }
 
 async function initialize() {
+  populateCollegeSelects();
   bindEvents();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});

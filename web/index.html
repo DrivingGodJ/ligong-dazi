@@ -13,8 +13,8 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icon-192.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=19" />
-    <script src="/static/app.js?v=19" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=20" />
+    <script src="/static/app.js?v=20" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -174,8 +174,10 @@
                   </label>
                 </div>
                 <label>
-                  院系
-                  <input name="department" type="text" maxlength="120" placeholder="例如：设计艺术与传媒学院" required />
+                  学院
+                  <select name="department" data-college-select required>
+                    <option value="">请选择学院</option>
+                  </select>
                 </label>
                 <fieldset class="gender-choice">
                   <legend>性别</legend>
@@ -536,8 +538,11 @@
                 <span id="campus-migration-note" class="field-help is-hidden"></span>
               </label>
               <label>
-                院系
-                <input name="department" type="text" maxlength="120" />
+                学院
+                <select name="department" data-college-select>
+                  <option value="">暂不填写</option>
+                </select>
+                <span id="legacy-department-note" class="field-help is-hidden"></span>
               </label>
               <label>
                 年级

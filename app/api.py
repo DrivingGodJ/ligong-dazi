@@ -25,6 +25,7 @@ from app.activity_media import (
     validate_image_content,
 )
 from app.agent import TOOL_CATALOG, AgentOutputError, run_matching_agent
+from app.colleges import match_college
 from app.core import (
     DatabaseRuntime,
     Settings,
@@ -606,6 +607,13 @@ async def update_me(
             )
     if "campus" in values and values["campus"] not in {"南京", "江阴"}:
         raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
+    if "department" in values:
+        department = values["department"]
+        if department is not None:
+            matched = match_college(department)
+            if matched is None and department.strip() != current_user.department:
+                raise HTTPException(status_code=422, detail="请选择列表中的学院")
+            values["department"] = matched or department.strip()
     min_group = values.get("preferred_group_min", current_user.preferred_group_min)
     max_group = values.get("preferred_group_max", current_user.preferred_group_max)
     if min_group > max_group:
