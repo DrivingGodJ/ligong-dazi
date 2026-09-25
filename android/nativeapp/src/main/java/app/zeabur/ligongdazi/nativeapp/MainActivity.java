@@ -43,7 +43,7 @@ import java.nio.charset.StandardCharsets;
 /** A standalone Android window for the live site; never launches the site in a browser. */
 public class MainActivity extends Activity {
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=2";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=3";
     private static final int PICK_PHOTO = 10;
     private WebView webView;
     private LinearLayout loadingPanel;
@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/2");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/3");
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
 
         webView.setWebViewClient(new WebViewClient() {
