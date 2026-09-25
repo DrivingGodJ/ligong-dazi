@@ -105,6 +105,7 @@ async def test_square_fuzzy_location_join_time_vote_and_calendar(client) -> None
     assert profile.json()["system_profile"]["completed_activity_count"] == 0
     assert "email" not in profile.json()["user"]
     assert "hidden_profile" not in profile.json()["user"]
+    assert "allow_invitations" not in profile.json()["user"]
 
     proposed_start = starts_at + timedelta(days=1, hours=1)
     vote = await client.post(

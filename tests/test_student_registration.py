@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import json
+from datetime import timedelta
+
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app.identity_appeals import process_expired_identity_appeals
+from app.identity_verification import StudentCardReview
 from app.migrations import ensure_sqlite_compatibility, remove_emails_from_bound_accounts
-from app.models import User
+from app.models import StudentIdAppeal, User, utcnow
 from app.notifications import enqueue_legacy_student_id_notices
 from tests.conftest import register_user
 
@@ -19,6 +24,19 @@ def registration(student_id: str, *, email: str | None = None) -> dict:
     if email:
         data["email"] = email
     return data
+
+
+def appeal_upload(student_id: str, contact: str = "QQ 12345678") -> dict:
+    return {
+        "data": {
+            "student_id": student_id,
+            "contact": contact,
+            "description": "这是我的学号",
+            "ai_consent": "true",
+            "registration_json": json.dumps(registration(student_id), ensure_ascii=False),
+        },
+        "files": {"student_card": ("student-card.jpg", b"\xff\xd8\xffstudent-card", "image/jpeg")},
+    }
 
 
 async def test_student_id_registration_login_and_private_profile(client) -> None:
@@ -52,7 +70,7 @@ async def test_student_id_registration_login_and_private_profile(client) -> None
     ).status_code == 422
 
 
-async def test_duplicate_id_appeal_is_admin_only_and_can_be_handled(client) -> None:
+async def test_duplicate_id_appeal_requires_card_and_can_enter_manual_review(client) -> None:
     _, owner = await register_user(client, "appeal-owner@example.com", "已有用户")
     sid = (await client.get("/api/v1/users/me", headers=owner)).json()["student_id"]
     duplicate = await client.post("/api/v1/auth/register", json=registration(sid))
@@ -60,18 +78,18 @@ async def test_duplicate_id_appeal_is_admin_only_and_can_be_handled(client) -> N
     assert duplicate.json()["detail"]["code"] == "student_id_taken"
     missing = await client.post(
         "/api/v1/auth/student-id-appeals",
-        json={"student_id": "202699999999", "contact": "QQ 12345678"},
+        **appeal_upload("202699999999"),
     )
     assert missing.status_code == 409
-    appeal = await client.post(
-        "/api/v1/auth/student-id-appeals",
-        json={"student_id": sid, "contact": "QQ 12345678", "description": "这是我的学号"},
+    no_card = await client.post(
+        "/api/v1/auth/student-id-appeals", data={"student_id": sid, "contact": "QQ 12345678"}
     )
+    assert no_card.status_code == 422
+    appeal = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
     assert appeal.status_code == 201, appeal.text
-    again = await client.post(
-        "/api/v1/auth/student-id-appeals",
-        json={"student_id": sid, "contact": "QQ 12345678"},
-    )
+    assert appeal.json()["status"] == "manual_review"
+    assert (await client.get("/api/v1/users/me", headers=owner)).status_code == 200
+    again = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
     assert again.status_code == 201
     listing = await client.get("/api/v1/admin/student-id-appeals")
     assert listing.status_code == 200
@@ -88,9 +106,177 @@ async def test_duplicate_id_appeal_is_admin_only_and_can_be_handled(client) -> N
         app.state.settings.environment = "test"
     handled = await client.post(f"/api/v1/admin/student-id-appeals/{item['id']}/handled")
     assert handled.status_code == 200
-    assert handled.json()["status"] == "handled"
+    assert handled.json()["status"] == "owner_confirmed"
     assert (await client.get("/api/v1/admin/student-id-appeals")).json() == []
-    assert len((await client.get("/api/v1/admin/student-id-appeals?status=handled")).json()) == 1
+    assert len((await client.get("/api/v1/admin/student-id-appeals?status=resolved")).json()) == 1
+
+
+async def test_approved_identity_appeal_freezes_then_transfers_only_login_identity(
+    client, monkeypatch
+) -> None:
+    async def approve_card(_content, _media_type, expected_student_id, _settings):
+        return StudentCardReview(
+            verdict="approved",
+            reason="学生卡清晰且学号一致",
+            confidence=0.98,
+            extracted_student_id=expected_student_id,
+        )
+
+    monkeypatch.setattr("app.api.review_student_card", approve_card)
+    _, owner_headers = await register_user(client, "appeal-frozen-owner@example.com", "原账号")
+    owner = (await client.get("/api/v1/users/me", headers=owner_headers)).json()
+    sid = owner["student_id"]
+    appeal = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
+    assert appeal.status_code == 201, appeal.text
+    assert appeal.json()["status"] == "awaiting_owner"
+
+    frozen_login = await client.post(
+        "/api/v1/auth/token",
+        json={"account": sid, "password": "test-password-123"},
+    )
+    assert frozen_login.status_code == 200
+    assert frozen_login.json()["account_state"] == "identity_frozen"
+    assert (await client.get("/api/v1/users/me", headers=owner_headers)).status_code == 423
+
+    _, searcher_headers = await register_user(client, "appeal-searcher@example.com", "找搭子的人")
+    start = utcnow() + timedelta(days=2)
+    preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=searcher_headers,
+        json={
+            "category": "羽毛球",
+            "starts_at": start.isoformat(),
+            "ends_at": (start + timedelta(hours=2)).isoformat(),
+            "location": "南区体育馆",
+            "people_needed": 1,
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    assert owner["id"] not in {
+        item["candidate_id"]
+        for item in preview.json()["candidates"]
+        if item["candidate_type"] == "user"
+    }
+
+    owner_card = await client.post(
+        "/api/v1/auth/identity-review/card",
+        headers=owner_headers,
+        data={"ai_consent": "true"},
+        files={"student_card": ("owner-card.jpg", b"\xff\xd8\xffowner-card", "image/jpeg")},
+    )
+    assert owner_card.status_code == 200, owner_card.text
+    assert owner_card.json()["status"] == "manual_review"
+    contact = await client.post(
+        "/api/v1/auth/identity-review/contact",
+        headers=owner_headers,
+        json={"contact": "QQ 87654321"},
+    )
+    assert contact.status_code == 200
+
+    item = (await client.get("/api/v1/admin/student-id-appeals")).json()[0]
+    assert item["contact"] == "QQ 12345678"
+    assert item["owner_contact"] == "QQ 87654321"
+    assert item["claimant_agent_review"]["verdict"] == "approved"
+    assert item["owner_agent_review"]["verdict"] == "approved"
+    resolved = await client.post(
+        f"/api/v1/admin/student-id-appeals/{item['id']}/resolve",
+        json={"decision": "transfer_to_claimant", "note": "人工核验后确认申诉人身份"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["status"] == "transferred"
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        stored_appeal = await session.get(StudentIdAppeal, item["id"])
+        assert stored_appeal is not None
+        assert stored_appeal.claimant_profile == {}
+        assert stored_appeal.claimant_password_hash is None
+
+    claimant_login = await client.post(
+        "/api/v1/auth/token",
+        json={"account": sid, "password": "test-password-123"},
+    )
+    assert claimant_login.status_code == 200
+    claimant_headers = {"Authorization": f"Bearer {claimant_login.json()['access_token']}"}
+    claimant = (await client.get("/api/v1/users/me", headers=claimant_headers)).json()
+    assert claimant["id"] != owner["id"]
+    assert claimant["display_name"] == "新同学"
+    assert (await client.get("/api/v1/users/me", headers=owner_headers)).status_code == 401
+
+
+async def test_identity_appeal_transfers_after_owner_deadline(client, monkeypatch) -> None:
+    async def approve_card(_content, _media_type, expected_student_id, _settings):
+        return StudentCardReview(
+            verdict="approved",
+            reason="学生卡清晰且学号一致",
+            confidence=0.99,
+            extracted_student_id=expected_student_id,
+        )
+
+    monkeypatch.setattr("app.api.review_student_card", approve_card)
+    _, owner_headers = await register_user(client, "appeal-timeout-owner@example.com", "超时账号")
+    owner = (await client.get("/api/v1/users/me", headers=owner_headers)).json()
+    sid = owner["student_id"]
+    created = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
+    assert created.json()["status"] == "awaiting_owner"
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        appeal = await session.get(StudentIdAppeal, created.json()["id"])
+        assert appeal is not None
+        appeal.owner_deadline = utcnow() - timedelta(seconds=1)
+        await session.commit()
+    async with app.state.database.session_factory() as session:
+        transferred = await process_expired_identity_appeals(session)
+        await session.commit()
+        assert [item.id for item in transferred] == [created.json()["id"]]
+
+    login = await client.post(
+        "/api/v1/auth/token",
+        json={"account": sid, "password": "test-password-123"},
+    )
+    assert login.status_code == 200
+    assert login.json()["account_state"] == "active"
+    assert (await client.get("/api/v1/users/me", headers=owner_headers)).status_code == 401
+
+
+async def test_existing_email_user_can_receive_appealed_student_id(client, monkeypatch) -> None:
+    async def approve_card(_content, _media_type, expected_student_id, _settings):
+        return StudentCardReview(
+            verdict="approved",
+            reason="学生卡清晰且学号一致",
+            confidence=0.99,
+            extracted_student_id=expected_student_id,
+        )
+
+    monkeypatch.setattr("app.api.review_student_card", approve_card)
+    _, owner_headers = await register_user(client, "appeal-existing-owner@example.com", "原账号")
+    owner = (await client.get("/api/v1/users/me", headers=owner_headers)).json()
+    _, claimant_headers = await register_user(
+        client, "appeal-existing-claimant@example.com", "旧邮箱申诉人"
+    )
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.database.session_factory() as session:
+        claimant = await session.scalar(select(User).where(User.display_name == "旧邮箱申诉人"))
+        assert claimant is not None
+        claimant_id = claimant.id
+        claimant.student_id = None
+        await session.commit()
+
+    upload = appeal_upload(owner["student_id"])
+    upload["data"].pop("registration_json")
+    created = await client.post(
+        "/api/v1/auth/student-id-appeals", headers=claimant_headers, **upload
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["status"] == "awaiting_owner"
+    relinquished = await client.post(
+        "/api/v1/auth/identity-review/relinquish", headers=owner_headers
+    )
+    assert relinquished.status_code == 200, relinquished.text
+    claimant = (await client.get("/api/v1/users/me", headers=claimant_headers)).json()
+    assert claimant["id"] == claimant_id
+    assert claimant["student_id"] == owner["student_id"]
+    assert claimant["display_name"] == "旧邮箱申诉人"
 
 
 async def test_old_email_account_can_claim_unique_student_id(client) -> None:

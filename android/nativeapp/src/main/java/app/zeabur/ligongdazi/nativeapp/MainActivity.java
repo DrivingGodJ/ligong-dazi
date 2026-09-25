@@ -10,6 +10,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
@@ -28,6 +30,7 @@ import android.webkit.URLUtil;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -40,10 +43,18 @@ import java.nio.charset.StandardCharsets;
 /** A standalone Android window for the live site; never launches the site in a browser. */
 public class MainActivity extends Activity {
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=1";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=2";
     private static final int PICK_PHOTO = 10;
     private WebView webView;
+    private LinearLayout loadingPanel;
+    private TextView loadingDetail;
     private LinearLayout errorPanel;
+    private final Handler connectionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable slowConnectionNotice = () -> {
+        if (loadingPanel != null && loadingPanel.getVisibility() == View.VISIBLE) {
+            loadingDetail.setText("服务器响应有点慢，正在继续连接…");
+        }
+    };
     private ValueCallback<Uri[]> fileCallback;
     private Uri cameraUri;
     private boolean pageFailed;
@@ -69,10 +80,37 @@ public class MainActivity extends Activity {
         webView = new WebView(this);
         root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
 
+        loadingPanel = new LinearLayout(this);
+        loadingPanel.setOrientation(LinearLayout.VERTICAL);
+        loadingPanel.setGravity(Gravity.CENTER);
+        loadingPanel.setPadding(dp(32), dp(40), dp(32), dp(40));
+        loadingPanel.setBackgroundColor(Color.rgb(20, 17, 27));
+        loadingPanel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        ProgressBar progress = new ProgressBar(this);
+        LinearLayout.LayoutParams progressLayout = new LinearLayout.LayoutParams(dp(48), dp(48));
+        progressLayout.bottomMargin = dp(24);
+        loadingPanel.addView(progress, progressLayout);
+        TextView loadingTitle = new TextView(this);
+        loadingTitle.setText("正在连接理工搭子局");
+        loadingTitle.setTextColor(Color.WHITE);
+        loadingTitle.setTextSize(20);
+        loadingTitle.setGravity(Gravity.CENTER);
+        loadingTitle.setTypeface(loadingTitle.getTypeface(), android.graphics.Typeface.BOLD);
+        loadingPanel.addView(loadingTitle);
+        loadingDetail = new TextView(this);
+        loadingDetail.setText("正在加载最新内容，请稍候…");
+        loadingDetail.setTextColor(Color.rgb(192, 181, 211));
+        loadingDetail.setTextSize(15);
+        loadingDetail.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams detailLayout = new LinearLayout.LayoutParams(-2, -2);
+        detailLayout.topMargin = dp(10);
+        loadingPanel.addView(loadingDetail, detailLayout);
+        root.addView(loadingPanel, new FrameLayout.LayoutParams(-1, -1));
+
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
         errorPanel.setGravity(Gravity.CENTER);
-        errorPanel.setPadding(40, 40, 40, 40);
+        errorPanel.setPadding(dp(32), dp(40), dp(32), dp(40));
         errorPanel.setBackgroundColor(Color.rgb(20, 17, 27));
         TextView message = new TextView(this);
         message.setText("暂时连不上搭子局\n检查网络后再试一次");
@@ -82,7 +120,7 @@ public class MainActivity extends Activity {
         errorPanel.addView(message);
         Button retry = new Button(this);
         retry.setText("重新连接");
-        retry.setOnClickListener(v -> webView.reload());
+        retry.setOnClickListener(v -> webView.loadUrl(START_URL));
         errorPanel.addView(retry);
         errorPanel.setVisibility(View.GONE);
         root.addView(errorPanel, new FrameLayout.LayoutParams(-1, -1));
@@ -98,7 +136,7 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/1");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/2");
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
 
         webView.setWebViewClient(new WebViewClient() {
@@ -112,18 +150,18 @@ public class MainActivity extends Activity {
 
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 pageFailed = false;
-                errorPanel.setVisibility(View.GONE);
+                showLoading();
             }
 
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     pageFailed = true;
-                    errorPanel.setVisibility(View.VISIBLE);
+                    showConnectionError();
                 }
             }
 
             @Override public void onPageFinished(WebView view, String url) {
-                if (!pageFailed) errorPanel.setVisibility(View.GONE);
+                if (!pageFailed) hideConnectionPanels();
             }
         });
 
@@ -184,6 +222,30 @@ public class MainActivity extends Activity {
 
         if (savedInstanceState == null) webView.loadUrl(START_URL);
         else webView.restoreState(savedInstanceState);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void showLoading() {
+        connectionHandler.removeCallbacks(slowConnectionNotice);
+        loadingDetail.setText("正在加载最新内容，请稍候…");
+        errorPanel.setVisibility(View.GONE);
+        loadingPanel.setVisibility(View.VISIBLE);
+        connectionHandler.postDelayed(slowConnectionNotice, 8000);
+    }
+
+    private void hideConnectionPanels() {
+        connectionHandler.removeCallbacks(slowConnectionNotice);
+        loadingPanel.setVisibility(View.GONE);
+        errorPanel.setVisibility(View.GONE);
+    }
+
+    private void showConnectionError() {
+        connectionHandler.removeCallbacks(slowConnectionNotice);
+        loadingPanel.setVisibility(View.GONE);
+        errorPanel.setVisibility(View.VISIBLE);
     }
 
     private void openOutside(Uri uri) {
@@ -255,6 +317,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        connectionHandler.removeCallbacks(slowConnectionNotice);
         if (fileCallback != null) fileCallback.onReceiveValue(null);
         if (webView != null) {
             ((ViewGroup) webView.getParent()).removeView(webView);

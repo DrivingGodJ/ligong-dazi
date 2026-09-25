@@ -237,6 +237,68 @@ async def test_matching_only_offers_same_gender_and_checks_invite_acceptance(cli
     assert accepted.status_code == 200
 
 
+async def test_invitation_preference_filters_and_rechecks_candidates(client) -> None:
+    _, owner_headers = await register_user(client, "invite-pref-owner@njust.edu.cn", "发起人")
+    _, second_owner_headers = await register_user(
+        client, "invite-pref-owner-2@njust.edu.cn", "另一位发起人"
+    )
+    _, candidate_headers = await register_user(
+        client, "invite-pref-candidate@njust.edu.cn", "候选搭子"
+    )
+    candidate = (await client.get("/api/v1/users/me", headers=candidate_headers)).json()
+    assert candidate["allow_invitations"] is True
+    start = datetime.now(UTC) + timedelta(days=2)
+
+    preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=owner_headers,
+        json={
+            "category": "羽毛球",
+            "starts_at": start.isoformat(),
+            "ends_at": (start + timedelta(hours=2)).isoformat(),
+            "location": "南区体育馆",
+            "people_needed": 1,
+        },
+    )
+    assert preview.status_code == 201, preview.text
+    assert candidate["id"] in {
+        item["candidate_id"]
+        for item in preview.json()["candidates"]
+        if item["candidate_type"] == "user"
+    }
+
+    disabled = await client.patch(
+        "/api/v1/users/me", headers=candidate_headers, json={"allow_invitations": False}
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["allow_invitations"] is False
+    stale_confirm = await client.post(
+        f"/api/v1/matches/{preview.json()['match_request_id']}/confirm",
+        headers=owner_headers,
+        json={"candidate_user_ids": [candidate["id"]]},
+    )
+    assert stale_confirm.status_code == 409
+    assert "关闭邀请" in stale_confirm.text
+
+    refreshed_preview = await client.post(
+        "/api/v1/matches/preview",
+        headers=second_owner_headers,
+        json={
+            "category": "羽毛球",
+            "starts_at": (start + timedelta(days=1)).isoformat(),
+            "ends_at": (start + timedelta(days=1, hours=2)).isoformat(),
+            "location": "南区体育馆",
+            "people_needed": 1,
+        },
+    )
+    assert refreshed_preview.status_code == 201, refreshed_preview.text
+    assert candidate["id"] not in {
+        item["candidate_id"]
+        for item in refreshed_preview.json()["candidates"]
+        if item["candidate_type"] == "user"
+    }
+
+
 async def test_square_search_dates_categories_and_pages(client) -> None:
     _, owner_headers = await register_user(client, "filter-owner@njust.edu.cn", "活动发起人")
     _, viewer_headers = await register_user(client, "filter-viewer@njust.edu.cn", "逛广场")

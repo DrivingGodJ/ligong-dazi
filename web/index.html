@@ -13,8 +13,8 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/static/icon-192.png" />
-    <link rel="stylesheet" href="/static/styles.css?v=21" />
-    <script src="/static/app.js?v=21" defer></script>
+    <link rel="stylesheet" href="/static/styles.css?v=22" />
+    <script src="/static/app.js?v=22" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -522,6 +522,16 @@
           </section>
 
           <form id="profile-form" class="profile-form">
+            <label class="invitation-preference">
+              <span class="invitation-preference-copy">
+                <strong>允许别人邀请我</strong>
+                <small>关闭后，你不会出现在其他人的可邀请候选中；仍可主动找搭子或加入活动，已有邀请不受影响。</small>
+              </span>
+              <span class="preference-switch">
+                <input name="allow_invitations" type="checkbox" checked />
+                <span aria-hidden="true"></span>
+              </span>
+            </label>
             <div class="profile-grid">
               <label>
                 昵称
@@ -629,14 +639,46 @@
         <button class="modal-close" type="button" data-close-dialog="student-appeal-dialog" aria-label="关闭申诉">×</button>
         <p class="eyebrow">学号申诉</p>
         <h2>这个学号已经被使用？</h2>
-        <p class="modal-copy">如果这确实是你的学号，请留下能联系到你的方式。管理员会人工核查；提交不会自动改动别人的账号。</p>
+        <p class="modal-copy">如果这确实是你的学号，请上传学生卡人像面。审核 Agent 通过后，原账号会冻结 24 小时等待对方举证；双方材料都可信时转人工复核。</p>
         <form id="student-appeal-form" class="form-stack">
           <label>申诉学号<input name="student_id" type="text" readonly required /></label>
           <label>联系方式（必填）<input name="contact" type="text" maxlength="160" minlength="5" placeholder="微信、QQ、手机号或邮箱" autocomplete="off" required /></label>
+          <label>学生卡人像面（必填）
+            <input name="student_card" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required />
+            <span class="field-help">请拍清学校名称、本人照片和学号，单张不超过 5 MB。不要上传银行卡或身份证。</span>
+          </label>
           <label>补充说明（选填）<textarea name="description" rows="3" maxlength="500" placeholder="例如：什么时候发现学号被占用"></textarea></label>
+          <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span>我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审；无法可靠判断时会转人工。</span></label>
           <p id="student-appeal-status" class="form-error is-hidden" role="status" aria-live="polite"></p>
-          <button class="button button-primary" type="submit">提交给管理员核查</button>
+          <button class="button button-primary" type="submit">提交身份申诉</button>
         </form>
+      </div>
+    </dialog>
+
+    <dialog id="identity-review-dialog" class="modal-card" data-lock-close>
+      <div class="modal-shell">
+        <p class="eyebrow">账号安全核验</p>
+        <h2>你的学号收到身份申诉</h2>
+        <p id="identity-review-message" class="modal-copy">账号已暂时冻结，请按提示完成核验。</p>
+        <p id="identity-review-deadline" class="identity-deadline"></p>
+        <form id="identity-card-form" class="form-stack">
+          <label>上传你的学生卡人像面
+            <input name="student_card" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required />
+            <span class="field-help">请确保学校名称、本人照片和学号清晰可见，单张不超过 5 MB。</span>
+          </label>
+          <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span>我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审。</span></label>
+          <button class="button button-primary" type="submit">提交学生卡核验</button>
+        </form>
+        <form id="identity-contact-form" class="form-stack is-hidden">
+          <label>人工复核联系方式<input name="contact" type="text" minlength="5" maxlength="160" placeholder="微信、QQ、手机号或邮箱" required /></label>
+          <button class="button button-primary" type="submit">提交联系方式</button>
+        </form>
+        <div class="identity-review-actions">
+          <button id="identity-refresh-button" class="button button-quiet" type="button">刷新状态</button>
+          <button id="identity-relinquish-button" class="button button-danger" type="button">我放弃这个账号</button>
+        </div>
+        <p id="identity-review-status" class="form-error is-hidden" role="status" aria-live="polite"></p>
+        <button id="identity-logout-button" class="button button-quiet" type="button">退出，稍后再处理</button>
       </div>
     </dialog>
 

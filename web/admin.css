@@ -10,6 +10,7 @@
 .appeal-card-heading time, .appeal-card-footer span { color: var(--ink-600); font-size: 0.85rem; }
 .admin-appeal-card p { margin: 0.6rem 0; overflow-wrap: anywhere; }
 .appeal-card-footer { margin-top: 0.85rem; }
+.appeal-materials, .appeal-resolution-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
 .admin-header-actions {
   display: flex;

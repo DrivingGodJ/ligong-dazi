@@ -5,7 +5,7 @@
 ## 第一次上线
 
 1. 用自己的 GitHub 账号登录 [Railway](https://railway.com/)，创建项目，选择 **Deploy from GitHub repo**，连接 `DrivingGodJ/ligong-dazi` 的 `main` 分支。Railway 会自动识别仓库根目录的 `Dockerfile`。
-2. **先挂载持久化存储，再开放网址。** 在服务上添加 Volume，挂载路径准确填写 `/app/data`。数据库、活动照片和后台保存的 AI 设置都在这里。未挂载或路径填错时，程序会拒绝在 Railway 上启动，避免把真实数据写到临时磁盘。
+2. **先挂载持久化存储，再开放网址。** 在服务上添加 Volume，挂载路径准确填写 `/app/data`。数据库、活动照片、身份申诉材料和后台保存的 AI 设置都在这里。未挂载或路径填错时，程序会拒绝在 Railway 上启动，避免把真实数据写到临时磁盘。
 3. 在服务的 Variables 中添加两个私密变量，不要写进 GitHub、群聊或聊天记录：
 
    | 变量名 | 填写内容 |
@@ -13,7 +13,7 @@
    | `DAZI_JWT_SECRET` | 密码管理器生成的至少 32 位随机字符串；以后保持不变，改变后所有用户都要重新登录 |
    | `DAZI_ADMIN_PASSWORD` | 仅管理员知道的至少 20 位独立口令；不要与 GitHub、Railway 或普通用户密码相同 |
 
-   `Dockerfile` 已把运行模式设为生产环境、AI 设为纯规则模式，并把数据库、照片和后台设置指向 `/app/data`；不用复制本机 `.env`，更不要把以前发在聊天里的 Key 放上去。
+   `Dockerfile` 已把运行模式设为生产环境、AI 设为纯规则模式，并把数据库、活动照片、身份申诉材料和后台设置指向 `/app/data`；不用复制本机 `.env`，更不要把以前发在聊天里的 Key 放上去。
 4. 在服务设置里把 Healthcheck Path 设为 `/health/ready`，副本数保持 **1**。SQLite 和当前定时任务尚不适合多副本同时运行。
 5. 在 Networking → Public Networking 点击 **Generate Domain**。Railway 会提供 HTTPS 网址。先访问 `/health/ready`，应看到 `status: ready` 和 `agent_mode: deterministic`；再打开首页注册一个新测试账号。
 6. 管理后台地址是“同一网址后加 `/admin`”。首次进入需要步骤 3 的管理员口令。后台可以看人数、匹配记录和切换 AI 服务；API Key 只在后台输入，不会返回浏览器。切换结果保存在 Volume，重启后仍会生效。

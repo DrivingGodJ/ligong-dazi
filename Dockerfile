@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DAZI_CORS_ORIGINS="[]" \
     DAZI_DATABASE_URL="sqlite+aiosqlite:////app/data/ligong_dazi.db" \
     DAZI_ACTIVITY_PHOTO_DIRECTORY="/app/data/activity_photos" \
+    DAZI_IDENTITY_APPEAL_DIRECTORY="/app/data/student_id_appeals" \
     DAZI_CONFIG_FILE_PATH="/app/data/admin.env" \
     DAZI_PUSH_KEY_FILE_PATH="/app/data/vapid_private.pem" \
     PATH="/app/.venv/bin:$PATH"

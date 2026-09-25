@@ -10,7 +10,18 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import delete, func, or_, select, update
@@ -34,6 +45,12 @@ from app.core import (
     hash_password,
     verify_password,
 )
+from app.identity_appeals import (
+    redact_claimant_registration,
+    remove_appeal_files,
+    transfer_student_id,
+)
+from app.identity_verification import review_student_card
 from app.matching import MatchContext, location_similarity
 from app.models import (
     Activity,
@@ -88,6 +105,8 @@ from app.schemas import (
     CandidatePublic,
     FeedbackCreate,
     FeedbackResult,
+    FrozenAccountStatus,
+    IdentityContactUpdate,
     InvitationInboxItem,
     InvitationPublic,
     InvitationRespondRequest,
@@ -107,7 +126,7 @@ from app.schemas import (
     ProfileSummaryResponse,
     PushSubscriptionRequest,
     RegisterRequest,
-    StudentIdAppealCreate,
+    StudentIdAppealReceipt,
     TokenResponse,
     ToolDefinition,
     UserMe,
@@ -115,6 +134,7 @@ from app.schemas import (
     UserProfileUpdate,
     UserPublic,
     UserSystemProfile,
+    normalize_student_id,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -138,7 +158,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-async def get_current_user(
+async def get_authenticated_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(auth_scheme)],
     session: SessionDep,
     settings: SettingsDep,
@@ -155,6 +175,47 @@ async def get_current_user(
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
+    return user
+
+
+AuthenticatedUser = Annotated[User, Depends(get_authenticated_user)]
+
+
+async def get_optional_authenticated_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(auth_scheme)],
+    session: SessionDep,
+    settings: SettingsDep,
+) -> User | None:
+    if credentials is None:
+        return None
+    if credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录凭证格式无效")
+    try:
+        user_id = decode_access_token(credentials.credentials, settings)
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录凭证无效或已过期",
+        ) from exc
+    user = await session.get(User, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
+    return user
+
+
+OptionalAuthenticatedUser = Annotated[User | None, Depends(get_optional_authenticated_user)]
+
+
+async def get_current_user(user: AuthenticatedUser) -> User:
+    if user.identity_frozen:
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "code": "identity_verification_required",
+                "message": "账号正在核验学号归属，只能提交学生卡或放弃账号。",
+                "appeal_id": user.identity_appeal_id,
+            },
+        )
     return user
 
 
@@ -183,6 +244,32 @@ def user_me(user: User) -> UserMe:
     if user.email.endswith("@accounts.invalid"):
         values["email"] = None
     return UserMe.model_validate(values)
+
+
+async def save_identity_card(
+    upload: UploadFile,
+    appeal_id: str,
+    side: str,
+    settings: Settings,
+) -> tuple[str, str, bytes]:
+    media_type = (upload.content_type or "").lower()
+    if media_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=422, detail="学生卡照片请选择 JPG、PNG 或 WebP 格式")
+    try:
+        content = await upload.read(settings.identity_card_max_bytes + 1)
+    finally:
+        await upload.close()
+    content, media_type, extension = validate_image_content(
+        content, media_type, settings.identity_card_max_bytes
+    )
+    root = await asyncio.to_thread(
+        lambda: Path(settings.identity_appeal_directory).expanduser().resolve()
+    )
+    directory = root / appeal_id
+    await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
+    path = directory / f"{side}.{extension}"
+    await asyncio.to_thread(path.write_bytes, content)
+    return str(path), media_type, content
 
 
 async def activity_public(session: AsyncSession, activity: Activity) -> ActivityPublic:
@@ -523,14 +610,38 @@ async def register(
     return TokenResponse(access_token=token, expires_at=expires_at)
 
 
-@router.post("/auth/student-id-appeals", status_code=201)
+@router.post(
+    "/auth/student-id-appeals",
+    response_model=StudentIdAppealReceipt,
+    status_code=201,
+)
 async def create_student_id_appeal(
-    payload: StudentIdAppealCreate,
     request: Request,
     session: SessionDep,
-) -> dict[str, str]:
-    if not await session.scalar(select(User.id).where(User.student_id == payload.student_id)):
+    settings: SettingsDep,
+    claimant: OptionalAuthenticatedUser,
+    student_id: Annotated[str, Form()],
+    contact: Annotated[str, Form(min_length=5, max_length=160)],
+    student_card: Annotated[UploadFile, File()],
+    ai_consent: Annotated[bool, Form()],
+    description: Annotated[str | None, Form(max_length=500)] = None,
+    registration_json: Annotated[str | None, Form()] = None,
+) -> StudentIdAppealReceipt:
+    try:
+        normalized_id = normalize_student_id(student_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    contact = contact.strip()
+    owner = await session.scalar(select(User).where(User.student_id == normalized_id))
+    if owner is None:
         raise HTTPException(status_code=409, detail="这个学号目前没有被使用，请返回注册页面重试")
+    if not ai_consent:
+        raise HTTPException(status_code=422, detail="请先同意学生卡照片用于身份初审")
+    if claimant is not None:
+        if claimant.id == owner.id:
+            raise HTTPException(status_code=409, detail="这个学号已经属于当前账号")
+        if claimant.student_id is not None:
+            raise HTTPException(status_code=409, detail="当前账号已经绑定学号，不能申诉另一个学号")
     client_host = request.client.host if request.client else "unknown"
     attempts: dict[str, list[float]] = request.app.state.appeal_attempts
     now = time.monotonic()
@@ -540,22 +651,104 @@ async def create_student_id_appeal(
     recent.append(now)
     attempts[client_host] = recent
     existing = await session.scalar(
-        select(StudentIdAppeal.id).where(
-            StudentIdAppeal.student_id == payload.student_id,
-            StudentIdAppeal.contact == payload.contact,
-            StudentIdAppeal.status == "pending",
+        select(StudentIdAppeal).where(
+            StudentIdAppeal.student_id == normalized_id,
+            StudentIdAppeal.status.in_(
+                ["agent_review", "awaiting_owner", "owner_review", "manual_review"]
+            ),
         )
     )
-    if existing is None:
+    if existing is not None:
+        if existing.contact != contact:
+            raise HTTPException(status_code=409, detail="这个学号已有一条核验中的申诉")
+        return StudentIdAppealReceipt(
+            id=existing.id,
+            status=existing.status,
+            message="这条申诉正在处理中，请勿重复提交。",
+        )
+
+    profile: dict = {}
+    password_hash: str | None = None
+    if registration_json:
+        try:
+            registration = RegisterRequest.model_validate_json(registration_json)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="注册资料不完整，请返回注册页重新填写",
+            ) from exc
+        if registration.student_id != normalized_id:
+            raise HTTPException(status_code=422, detail="申诉学号与注册学号不一致")
+        profile = registration.model_dump(
+            mode="json", exclude={"student_id", "password", "email", "university"}
+        )
+        password_hash = hash_password(registration.password)
+
+    appeal = StudentIdAppeal(
+        id=new_id(),
+        student_id=normalized_id,
+        owner_id=owner.id,
+        claimant_user_id=claimant.id if claimant is not None else None,
+        contact=contact,
+        description=description.strip() if description else None,
+        status="agent_review",
+        claimant_profile=profile,
+        claimant_password_hash=password_hash,
+    )
+    session.add(appeal)
+    path: str | None = None
+    try:
+        path, media_type, content = await save_identity_card(
+            student_card, appeal.id, "claimant", settings
+        )
+        appeal.claimant_card_path = path
+        appeal.claimant_card_media_type = media_type
+        review = await review_student_card(content, media_type, normalized_id, settings)
+        appeal.claimant_agent_review = review.as_dict()
+        can_transfer = claimant is not None or (profile and password_hash)
+        if review.verdict == "approved" and can_transfer:
+            appeal.status = "awaiting_owner"
+            appeal.owner_deadline = utcnow() + timedelta(days=1)
+            owner.identity_frozen = True
+            owner.identity_appeal_id = appeal.id
+            await enqueue_notification(
+                session,
+                owner.id,
+                f"identity_appeal:{appeal.id}",
+                "identity_appeal",
+                "你的学号收到身份申诉",
+                "账号已暂时冻结，请在 24 小时内上传学生卡人像面或主动放弃账号。",
+                "/?identity-review=1",
+            )
+            message = "AI 初审通过，原账号已冻结并进入 24 小时举证期。"
+        elif review.verdict == "rejected":
+            appeal.status = "claimant_rejected"
+            appeal.resolution_note = review.reason
+            appeal.resolved_at = utcnow()
+            redact_claimant_registration(appeal)
+            message = "材料未通过初审，账号不会被冻结；如有疑问请联系管理员。"
+        else:
+            appeal.status = "manual_review"
+            appeal.resolution_note = review.reason
+            message = "材料需要人工复核，账号暂不会被冻结。管理员会按你留下的方式联系。"
         session.add(
-            StudentIdAppeal(
-                student_id=payload.student_id,
-                contact=payload.contact,
-                description=payload.description.strip() if payload.description else None,
+            SystemEvent(
+                category="identity_appeal",
+                status=appeal.status,
+                title="收到学号占用申诉",
+                message=f"学号 {normalized_id} 的材料初审结果：{message}",
+                details={"appeal_id": appeal.id, "verdict": review.verdict},
             )
         )
         await session.commit()
-    return {"message": "申诉已收到，管理员核查后会通过你留下的方式联系。请勿重复提交。"}
+    except Exception:
+        await session.rollback()
+        if path:
+            await asyncio.to_thread(Path(path).unlink, missing_ok=True)
+        raise
+    if appeal.status == "claimant_rejected":
+        await asyncio.to_thread(remove_appeal_files, appeal)
+    return StudentIdAppealReceipt(id=appeal.id, status=appeal.status, message=message)
 
 
 @router.post("/auth/token", response_model=TokenResponse)
@@ -573,7 +766,170 @@ async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDe
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已停用")
     token, expires_at = create_access_token(user.id, settings)
-    return TokenResponse(access_token=token, expires_at=expires_at)
+    return TokenResponse(
+        access_token=token,
+        expires_at=expires_at,
+        account_state="identity_frozen" if user.identity_frozen else "active",
+        identity_appeal_id=user.identity_appeal_id,
+    )
+
+
+@router.get("/auth/account-state")
+async def read_account_state(user: AuthenticatedUser) -> dict[str, str | None]:
+    return {
+        "account_state": "identity_frozen" if user.identity_frozen else "active",
+        "identity_appeal_id": user.identity_appeal_id,
+    }
+
+
+async def frozen_identity_appeal(session: AsyncSession, user: User) -> StudentIdAppeal:
+    if not user.identity_frozen or not user.identity_appeal_id:
+        raise HTTPException(status_code=409, detail="账号当前不在身份核验中")
+    appeal = await session.get(StudentIdAppeal, user.identity_appeal_id)
+    if appeal is None or appeal.owner_id != user.id:
+        raise HTTPException(status_code=409, detail="身份核验记录不存在，请联系管理员")
+    return appeal
+
+
+def frozen_status_message(appeal: StudentIdAppeal) -> str:
+    if appeal.status == "awaiting_owner":
+        return "请在截止时间前上传学生卡人像面，或主动放弃账号。"
+    if appeal.status == "owner_review":
+        return "你的材料正在由审核 Agent 检查，请稍候。"
+    if appeal.status == "manual_review":
+        return "双方材料都需要人工核查，请补充联系方式并等待管理员联系。"
+    return "身份核验状态已经变化，请联系管理员。"
+
+
+@router.get("/auth/identity-review", response_model=FrozenAccountStatus)
+async def read_identity_review(
+    user: AuthenticatedUser,
+    session: SessionDep,
+) -> FrozenAccountStatus:
+    appeal = await frozen_identity_appeal(session, user)
+    return FrozenAccountStatus(
+        appeal_id=appeal.id,
+        student_id=appeal.student_id,
+        status=appeal.status,
+        deadline=appeal.owner_deadline,
+        message=frozen_status_message(appeal),
+    )
+
+
+@router.post("/auth/identity-review/card", response_model=FrozenAccountStatus)
+async def submit_owner_identity_card(
+    user: AuthenticatedUser,
+    session: SessionDep,
+    settings: SettingsDep,
+    student_card: Annotated[UploadFile, File()],
+    ai_consent: Annotated[bool, Form()],
+) -> FrozenAccountStatus:
+    appeal = await frozen_identity_appeal(session, user)
+    if appeal.status not in {"awaiting_owner", "owner_review"}:
+        raise HTTPException(status_code=409, detail="当前状态不需要重复上传学生卡")
+    if not ai_consent:
+        raise HTTPException(status_code=422, detail="请先同意学生卡照片用于身份初审")
+    appeal.status = "owner_review"
+    old_path = appeal.owner_card_path
+    path, media_type, content = await save_identity_card(
+        student_card, appeal.id, "owner", settings
+    )
+    appeal.owner_card_path = path
+    appeal.owner_card_media_type = media_type
+    review = await review_student_card(content, media_type, appeal.student_id, settings)
+    appeal.owner_agent_review = review.as_dict()
+    if review.verdict == "approved":
+        appeal.status = "manual_review"
+        appeal.resolution_note = "双方学生卡材料均通过 AI 初审，等待人工核验联系方式"
+        message = "双方材料都通过了初审，请补充联系方式并等待管理员联系。"
+        await enqueue_notification(
+            session,
+            user.id,
+            f"identity_manual_review:{appeal.id}",
+            "identity_appeal",
+            "身份申诉进入人工核查",
+            "双方材料均通过初审，请在核验页面补充联系方式，等待管理员联系。",
+            "/?identity-review=1",
+        )
+    elif review.verdict == "rejected":
+        claimant = await transfer_student_id(session, appeal, "原账号提交的材料未通过初审")
+        if claimant is None:
+            message = frozen_status_message(appeal)
+        else:
+            message = "材料未通过初审，学号已交接给申诉人。"
+    else:
+        appeal.status = "manual_review"
+        appeal.resolution_note = review.reason
+        message = "材料无法由 AI 明确判断，已转人工复核。"
+    session.add(
+        SystemEvent(
+            category="identity_appeal",
+            status=appeal.status,
+            title="原账号提交身份材料",
+            message=f"学号 {appeal.student_id} 的原账号材料结果：{message}",
+            details={"appeal_id": appeal.id, "verdict": review.verdict},
+        )
+    )
+    await session.commit()
+    if old_path and old_path != path:
+        await asyncio.to_thread(Path(old_path).unlink, missing_ok=True)
+    if appeal.status == "transferred":
+        await asyncio.to_thread(remove_appeal_files, appeal)
+    return FrozenAccountStatus(
+        appeal_id=appeal.id,
+        student_id=appeal.student_id,
+        status=appeal.status,
+        deadline=appeal.owner_deadline,
+        message=message,
+    )
+
+
+@router.post("/auth/identity-review/contact", response_model=FrozenAccountStatus)
+async def submit_owner_identity_contact(
+    payload: IdentityContactUpdate,
+    user: AuthenticatedUser,
+    session: SessionDep,
+) -> FrozenAccountStatus:
+    appeal = await frozen_identity_appeal(session, user)
+    appeal.owner_contact = payload.contact
+    await session.commit()
+    return FrozenAccountStatus(
+        appeal_id=appeal.id,
+        student_id=appeal.student_id,
+        status=appeal.status,
+        deadline=appeal.owner_deadline,
+        message="联系方式已提交，管理员核查后会联系双方。",
+    )
+
+
+@router.post("/auth/identity-review/relinquish", response_model=FrozenAccountStatus)
+async def relinquish_frozen_account(
+    user: AuthenticatedUser,
+    session: SessionDep,
+) -> FrozenAccountStatus:
+    appeal = await frozen_identity_appeal(session, user)
+    claimant = await transfer_student_id(session, appeal, "原账号主动放弃账号")
+    if claimant is None:
+        await session.commit()
+        raise HTTPException(status_code=409, detail="注册资料不完整，已转人工处理")
+    session.add(
+        SystemEvent(
+            category="identity_appeal",
+            status="transferred",
+            title="原账号主动放弃",
+            message=f"学号 {appeal.student_id} 已交接给申诉人，原账号已停用。",
+            details={"appeal_id": appeal.id},
+        )
+    )
+    await session.commit()
+    await asyncio.to_thread(remove_appeal_files, appeal)
+    return FrozenAccountStatus(
+        appeal_id=appeal.id,
+        student_id=appeal.student_id,
+        status="transferred",
+        deadline=appeal.owner_deadline,
+        message="账号已放弃，学号已经交接给申诉人。",
+    )
 
 
 @router.get("/users/me", response_model=UserMe)
@@ -2006,17 +2362,26 @@ async def confirm_match(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="只能邀请本次推荐的用户"
             )
         if selected_ids:
-            selected_campuses = (
+            selected_users = (
                 await session.execute(
-                    select(User.id, User.campus).where(
+                    select(
+                        User.id,
+                        User.campus,
+                        User.allow_invitations,
+                        User.identity_frozen,
+                    ).where(
                         User.id.in_(selected_ids), User.is_active.is_(True)
                     )
                 )
             ).all()
-            if len(selected_campuses) != len(selected_ids) or any(
-                campus != ensure_campus(current_user) for _, campus in selected_campuses
+            if len(selected_users) != len(selected_ids) or any(
+                campus != ensure_campus(current_user) for _, campus, _, _ in selected_users
             ):
                 raise HTTPException(status_code=409, detail="候选搭子的校区发生变化，请重新匹配")
+            if any(not allowed for _, _, allowed, _ in selected_users):
+                raise HTTPException(status_code=409, detail="有搭子已关闭邀请，请重新匹配")
+            if any(frozen for _, _, _, frozen in selected_users):
+                raise HTTPException(status_code=409, detail="有搭子正在进行身份核验，请重新匹配")
         if len(selected_ids) > match_request.people_needed:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

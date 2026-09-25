@@ -265,6 +265,8 @@ async def search_available_users(
         User.is_active.is_(True),
         User.university == context.requester.university,
         User.campus == context.requester.campus,
+        User.allow_invitations.is_(True),
+        User.identity_frozen.is_(False),
         User.credit_score >= personalization.min_credit,
     ]
     if blocked_ids:

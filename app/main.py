@@ -19,6 +19,7 @@ from app.admin import load_persisted_ai_config
 from app.admin import router as admin_router
 from app.api import router as api_router
 from app.core import DatabaseRuntime, Settings, get_settings
+from app.identity_appeals import process_expired_identity_appeals, remove_appeal_files
 from app.migrations import (
     ensure_sqlite_compatibility,
     migrate_activity_campuses,
@@ -45,7 +46,10 @@ async def post_activity_maintenance(database: DatabaseRuntime, push_key_path: st
                 await process_completed_activities(session)
                 await cleanup_expired_activity_photos(session)
                 await enqueue_activity_reminders(session)
+                transferred_appeals = await process_expired_identity_appeals(session)
                 await session.commit()
+                for appeal in transferred_appeals:
+                    await asyncio.to_thread(remove_appeal_files, appeal)
                 await dispatch_push(session, push_key_path)
                 await session.commit()
         except Exception:
@@ -79,6 +83,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             lambda: Path(app_settings.activity_photo_directory).expanduser().resolve()
         )
         await asyncio.to_thread(photo_directory.mkdir, parents=True, exist_ok=True)
+        identity_directory = await asyncio.to_thread(
+            lambda: Path(app_settings.identity_appeal_directory).expanduser().resolve()
+        )
+        await asyncio.to_thread(identity_directory.mkdir, parents=True, exist_ok=True)
         if app_settings.auto_create_schema:
             async with database.engine.begin() as connection:
                 await connection.run_sync(Base.metadata.create_all)
@@ -98,7 +106,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await process_completed_activities(session)
             await cleanup_expired_activity_photos(session)
             await enqueue_activity_reminders(session)
+            transferred_appeals = await process_expired_identity_appeals(session)
             await session.commit()
+            for appeal in transferred_appeals:
+                await asyncio.to_thread(remove_appeal_files, appeal)
         maintenance_task = asyncio.create_task(
             post_activity_maintenance(database, app_settings.push_key_file_path)
         )

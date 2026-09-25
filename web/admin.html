@@ -9,8 +9,8 @@
     <title>管理后台 · 理工搭子局</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
     <link rel="stylesheet" href="/static/styles.css?v=15" />
-    <link rel="stylesheet" href="/static/admin.css?v=5" />
-    <script src="/static/admin.js?v=4" defer></script>
+    <link rel="stylesheet" href="/static/admin.css?v=6" />
+    <script src="/static/admin.js?v=5" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#admin-content">跳到后台内容</a>
@@ -237,13 +237,14 @@
           <div>
             <p class="eyebrow">人工核查</p>
             <h2 id="appeals-heading">学号占用申诉</h2>
-            <p>这里只给管理员查看联系方式。核实身份并联系当事人后，再标记为已处理；标记不会自动改绑学号。</p>
+            <p>学生卡材料仅在这里私下查看。AI 只做初审；双方材料都可信或模型无法确定时，必须由管理员决定保留原账号还是把学号交给申诉人。</p>
           </div>
           <button id="refresh-appeals" class="button button-small" type="button">刷新申诉</button>
         </div>
         <div class="appeal-toolbar" role="group" aria-label="筛选学号申诉">
-          <button class="log-filter is-active" type="button" data-appeal-filter="pending">待处理</button>
-          <button class="log-filter" type="button" data-appeal-filter="handled">已处理</button>
+          <button class="log-filter is-active" type="button" data-appeal-filter="active">核验中</button>
+          <button class="log-filter" type="button" data-appeal-filter="resolved">已结束</button>
+          <button class="log-filter" type="button" data-appeal-filter="all">全部</button>
         </div>
         <div id="admin-appeal-list" class="admin-appeal-list" aria-live="polite"><div class="admin-loading">正在读取申诉…</div></div>
         <button id="load-more-appeals" class="button button-quiet is-hidden" type="button">加载更多申诉</button>

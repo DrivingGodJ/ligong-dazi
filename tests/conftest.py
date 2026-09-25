@@ -24,6 +24,7 @@ async def client(tmp_path) -> AsyncIterator[httpx.AsyncClient]:
         ai_api_key=None,
         config_file_path=str(tmp_path / ".env"),
         activity_photo_directory=str(tmp_path / "activity-photos"),
+        identity_appeal_directory=str(tmp_path / "identity-appeals"),
         push_key_file_path=str(tmp_path / "vapid.pem"),
         cors_origins=["http://test"],
     )

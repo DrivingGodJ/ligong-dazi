@@ -27,7 +27,7 @@ const state = {
   config: null,
   logs: [],
   filter: "all",
-  appealFilter: "pending",
+  appealFilter: "active",
   appeals: [],
   appealOffset: 0,
   toastTimer: null,
@@ -119,15 +119,32 @@ async function loadDashboard() {
 
 function renderAppeals() {
   if (!state.appeals.length) {
-    elements.appealList.innerHTML = `<div class="admin-empty">${state.appealFilter === "pending" ? "目前没有待处理的学号申诉。" : "目前没有已处理的申诉。"}</div>`;
+    elements.appealList.innerHTML = `<div class="admin-empty">目前没有符合这个状态的学号申诉。</div>`;
     return;
   }
+  const statusLabels = {
+    agent_review: "AI 正在初审申诉材料",
+    awaiting_owner: "原账号 24 小时举证中",
+    owner_review: "AI 正在初审原账号材料",
+    manual_review: "等待人工决定归属",
+    claimant_rejected: "申诉材料未通过",
+    owner_confirmed: "已保留原账号",
+    transferred: "已交接给申诉人",
+  };
   elements.appealList.innerHTML = state.appeals.map((item) => `<article class="admin-appeal-card">
     <div class="appeal-card-heading"><strong>学号 ${escapeHtml(item.student_id)}</strong><time datetime="${escapeHtml(item.created_at)}">${escapeHtml(formatTime(item.created_at))}</time></div>
     <p><b>联系申请人：</b><span>${escapeHtml(item.contact)}</span></p>
+    ${item.owner_contact ? `<p><b>联系原账号：</b><span>${escapeHtml(item.owner_contact)}</span></p>` : ""}
     ${item.description ? `<p><b>补充说明：</b>${escapeHtml(item.description)}</p>` : ""}
-    <div class="appeal-card-footer"><span>${item.status === "handled" ? "已标记处理" : "等待人工核查"}</span>
-    ${item.status === "pending" ? `<button class="button button-quiet button-small" type="button" data-handle-appeal="${escapeHtml(item.id)}">核查后标记已处理</button>` : ""}</div>
+    <p><b>当前进度：</b>${escapeHtml(statusLabels[item.status] || item.status)}</p>
+    ${item.owner_deadline ? `<p><b>原账号截止：</b>${escapeHtml(formatTime(item.owner_deadline))}</p>` : ""}
+    ${item.resolution_note ? `<p><b>处理说明：</b>${escapeHtml(item.resolution_note)}</p>` : ""}
+    <div class="appeal-materials">
+      <a class="button button-quiet button-small" href="/api/v1/admin/student-id-appeals/${escapeHtml(item.id)}/card/claimant" target="_blank" rel="noopener">查看申诉人学生卡</a>
+      ${item.owner_agent_review && Object.keys(item.owner_agent_review).length ? `<a class="button button-quiet button-small" href="/api/v1/admin/student-id-appeals/${escapeHtml(item.id)}/card/owner" target="_blank" rel="noopener">查看原账号学生卡</a>` : ""}
+    </div>
+    <div class="appeal-card-footer"><span>${escapeHtml(statusLabels[item.status] || item.status)}</span>
+    ${["agent_review", "awaiting_owner", "owner_review", "manual_review"].includes(item.status) ? `<span class="appeal-resolution-actions"><button class="button button-quiet button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="keep_owner">保留原账号</button><button class="button button-primary button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="transfer_to_claimant">交给申诉人</button></span>` : ""}</div>
   </article>`).join("");
 }
 
@@ -431,12 +448,18 @@ function bindEvents() {
   });
   elements.loadMoreAppeals.addEventListener("click", () => loadAppeals(true));
   elements.appealList.addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-handle-appeal]");
+    const button = event.target.closest("[data-resolve-appeal]");
     if (!button) return;
+    const decision = button.dataset.decision;
+    const action = decision === "keep_owner" ? "保留原账号" : "把学号交给申诉人";
+    if (!window.confirm(`确认${action}？这个决定会结束冻结，且不能在页面中撤回。`)) return;
     setButtonLoading(button, true, "正在更新…");
     try {
-      await adminApi(`/student-id-appeals/${button.dataset.handleAppeal}/handled`, {method: "POST"});
-      showToast("已标记处理；学号绑定不会自动改变");
+      await adminApi(`/student-id-appeals/${button.dataset.resolveAppeal}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({decision}),
+      });
+      showToast(`已${action}`);
       await loadAppeals();
     } catch (error) { showToast(error.message); setButtonLoading(button, false); }
   });

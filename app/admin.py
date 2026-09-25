@@ -16,11 +16,18 @@ from urllib.parse import urlparse
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import DatabaseRuntime, Settings
+from app.identity_appeals import (
+    ACTIVE_APPEAL_STATUSES,
+    redact_claimant_registration,
+    remove_appeal_files,
+    transfer_student_id,
+)
 from app.models import (
     AgentRun,
     Invitation,
@@ -55,6 +62,11 @@ CONFIG_KEYS = {
 
 class AdminLogin(BaseModel):
     password: SecretStr
+
+
+class IdentityAppealDecision(BaseModel):
+    decision: Literal["keep_owner", "transfer_to_claimant"]
+    note: str | None = None
 
 
 PROVIDER_PRESETS = {
@@ -196,14 +208,16 @@ async def delete_admin_session(response: Response) -> dict[str, bool]:
 )
 async def list_student_id_appeals(
     session: SessionDep,
-    appeal_status: Annotated[
-        Literal["pending", "handled", "all"], Query(alias="status")
-    ] = "pending",
+    appeal_status: Annotated[str, Query(alias="status")] = "active",
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
 ) -> list[StudentIdAppealPublic]:
     statement = select(StudentIdAppeal).order_by(StudentIdAppeal.created_at.desc())
-    if appeal_status != "all":
+    if appeal_status == "active":
+        statement = statement.where(StudentIdAppeal.status.in_(ACTIVE_APPEAL_STATUSES))
+    elif appeal_status == "resolved":
+        statement = statement.where(StudentIdAppeal.status.not_in(ACTIVE_APPEAL_STATUSES))
+    elif appeal_status != "all":
         statement = statement.where(StudentIdAppeal.status == appeal_status)
     rows = list((await session.scalars(statement.offset(offset).limit(limit))).all())
     return [StudentIdAppealPublic.model_validate(row) for row in rows]
@@ -221,10 +235,79 @@ async def mark_student_id_appeal_handled(
     appeal = await session.get(StudentIdAppeal, appeal_id)
     if appeal is None:
         raise HTTPException(status_code=404, detail="申诉记录不存在")
-    if appeal.status != "handled":
-        appeal.status = "handled"
+    if appeal.status in ACTIVE_APPEAL_STATUSES:
+        owner = await session.get(User, appeal.owner_id) if appeal.owner_id else None
+        if owner is not None:
+            owner.identity_frozen = False
+            owner.identity_appeal_id = None
+        appeal.status = "owner_confirmed"
+        appeal.resolution_note = "管理员保留原账号"
         appeal.resolved_at = utcnow()
+        redact_claimant_registration(appeal)
         await session.commit()
+        await asyncio.to_thread(remove_appeal_files, appeal)
+    return StudentIdAppealPublic.model_validate(appeal)
+
+
+@router.get(
+    "/student-id-appeals/{appeal_id}/card/{side}",
+    dependencies=[Depends(require_admin)],
+    include_in_schema=False,
+)
+async def read_student_id_appeal_card(
+    appeal_id: str,
+    side: Literal["claimant", "owner"],
+    session: SessionDep,
+) -> FileResponse:
+    appeal = await session.get(StudentIdAppeal, appeal_id)
+    if appeal is None:
+        raise HTTPException(status_code=404, detail="申诉记录不存在")
+    path = appeal.claimant_card_path if side == "claimant" else appeal.owner_card_path
+    media_type = (
+        appeal.claimant_card_media_type if side == "claimant" else appeal.owner_card_media_type
+    )
+    if not path or not await asyncio.to_thread(Path(path).is_file):
+        raise HTTPException(status_code=404, detail="这份材料不存在或已经按隐私规则删除")
+    return FileResponse(
+        path,
+        media_type=media_type or "application/octet-stream",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.post(
+    "/student-id-appeals/{appeal_id}/resolve",
+    response_model=StudentIdAppealPublic,
+    dependencies=[Depends(require_admin)],
+)
+async def resolve_student_id_appeal(
+    appeal_id: str,
+    payload: IdentityAppealDecision,
+    session: SessionDep,
+) -> StudentIdAppealPublic:
+    appeal = await session.get(StudentIdAppeal, appeal_id)
+    if appeal is None:
+        raise HTTPException(status_code=404, detail="申诉记录不存在")
+    if appeal.status not in ACTIVE_APPEAL_STATUSES:
+        return StudentIdAppealPublic.model_validate(appeal)
+    owner = await session.get(User, appeal.owner_id) if appeal.owner_id else None
+    if payload.decision == "keep_owner":
+        if owner is not None:
+            owner.identity_frozen = False
+            owner.identity_appeal_id = None
+        appeal.status = "owner_confirmed"
+        appeal.resolution_note = (payload.note or "人工核验后保留原账号")[:500]
+        appeal.resolved_at = utcnow()
+        redact_claimant_registration(appeal)
+    else:
+        claimant = await transfer_student_id(
+            session, appeal, payload.note or "人工核验后将学号交接给申诉人"
+        )
+        if claimant is None:
+            await session.commit()
+            raise HTTPException(status_code=409, detail=appeal.resolution_note or "无法自动交接")
+    await session.commit()
+    await asyncio.to_thread(remove_appeal_files, appeal)
     return StudentIdAppealPublic.model_validate(appeal)
 
 

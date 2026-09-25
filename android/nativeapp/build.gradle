@@ -11,8 +11,8 @@ android {
         applicationId 'app.zeabur.ligongdazi.nativeapp'
         minSdkVersion 23
         targetSdkVersion 35
-        versionCode 1
-        versionName "1.0-beta"
+        versionCode 2
+        versionName "1.1-beta"
     }
 
     sourceSets.main.res.srcDirs += ['../app/src/main/res']

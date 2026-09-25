@@ -161,14 +161,44 @@ class StudentIdAppealPublic(ApiModel):
     contact: str
     description: str | None
     status: str
+    claimant_agent_review: dict
+    owner_agent_review: dict
+    owner_deadline: datetime | None
+    owner_contact: str | None
+    resolution_note: str | None
     created_at: datetime
     resolved_at: datetime | None
+
+
+class StudentIdAppealReceipt(ApiModel):
+    id: str
+    status: str
+    message: str
+
+
+class FrozenAccountStatus(ApiModel):
+    appeal_id: str
+    student_id: str
+    status: str
+    deadline: datetime | None
+    message: str
+
+
+class IdentityContactUpdate(ApiModel):
+    contact: str = Field(min_length=5, max_length=160)
+
+    @field_validator("contact")
+    @classmethod
+    def clean_contact(cls, value: str) -> str:
+        return value.strip()
 
 
 class TokenResponse(ApiModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_at: datetime
+    account_state: Literal["active", "identity_frozen"] = "active"
+    identity_appeal_id: str | None = None
 
 
 class UserProfileUpdate(ApiModel):
@@ -185,6 +215,7 @@ class UserProfileUpdate(ApiModel):
     social_style: Literal["quiet", "balanced", "outgoing"] | None = None
     preferred_group_min: int | None = Field(default=None, ge=2, le=30)
     preferred_group_max: int | None = Field(default=None, ge=2, le=30)
+    allow_invitations: bool | None = None
 
     @field_validator("campus", mode="before")
     @classmethod
@@ -248,6 +279,7 @@ class UserPublic(ApiModel):
 class UserMe(UserPublic):
     email: EmailStr | None
     student_id: str | None
+    allow_invitations: bool
     is_active: bool
     created_at: datetime
     ai_summary: str | None

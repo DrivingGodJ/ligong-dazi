@@ -87,11 +87,14 @@ class User(Base, TimestampMixin):
     social_style: Mapped[str] = mapped_column(String(30), default="balanced")
     preferred_group_min: Mapped[int] = mapped_column(Integer, default=2)
     preferred_group_max: Mapped[int] = mapped_column(Integer, default=6)
+    allow_invitations: Mapped[bool] = mapped_column(Boolean, default=True)
     credit_score: Mapped[int] = mapped_column(Integer, default=100, index=True)
     hidden_profile: Mapped[dict] = mapped_column(JSON, default=dict)
     hidden_profile_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_summary_generated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    identity_frozen: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    identity_appeal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
@@ -100,9 +103,24 @@ class StudentIdAppeal(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     student_id: Mapped[str] = mapped_column(String(24), index=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    claimant_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True, index=True
+    )
     contact: Mapped[str] = mapped_column(String(160))
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    claimant_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    claimant_password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    claimant_card_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    claimant_card_media_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    claimant_agent_review: Mapped[dict] = mapped_column(JSON, default=dict)
+    owner_card_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    owner_card_media_type: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    owner_agent_review: Mapped[dict] = mapped_column(JSON, default=dict)
+    owner_deadline: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    owner_contact: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 

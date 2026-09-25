@@ -75,6 +75,15 @@ const elements = {
   studentAppealDialog: document.querySelector("#student-appeal-dialog"),
   studentAppealForm: document.querySelector("#student-appeal-form"),
   studentAppealStatus: document.querySelector("#student-appeal-status"),
+  identityReviewDialog: document.querySelector("#identity-review-dialog"),
+  identityReviewMessage: document.querySelector("#identity-review-message"),
+  identityReviewDeadline: document.querySelector("#identity-review-deadline"),
+  identityReviewStatus: document.querySelector("#identity-review-status"),
+  identityCardForm: document.querySelector("#identity-card-form"),
+  identityContactForm: document.querySelector("#identity-contact-form"),
+  identityRefreshButton: document.querySelector("#identity-refresh-button"),
+  identityRelinquishButton: document.querySelector("#identity-relinquish-button"),
+  identityLogoutButton: document.querySelector("#identity-logout-button"),
   legacyStudentId: document.querySelector("#legacy-student-id"),
   claimStudentIdForm: document.querySelector("#claim-student-id-form"),
   claimStudentIdError: document.querySelector("#claim-student-id-error"),
@@ -384,6 +393,11 @@ async function handleLogin(event) {
     });
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
+    if (result.account_state === "identity_frozen") {
+      elements.loginForm.reset();
+      await openIdentityReview();
+      return;
+    }
     await loadCurrentUser();
     elements.loginForm.reset();
     switchTab(state.user.campus && state.user.student_id ? "match" : "profile");
@@ -395,15 +409,36 @@ async function handleLogin(event) {
   }
 }
 
+function registrationPayload() {
+  const form = new FormData(elements.registerForm);
+  const interests = form.getAll("interests");
+  const skillName = String(form.get("register_skill_name") || "").trim();
+  return {
+    display_name: String(form.get("display_name") || "").trim(),
+    student_id: String(form.get("student_id") || "").trim(),
+    password: form.get("password"),
+    university: "南京理工大学",
+    campus: String(form.get("campus") || "").trim(),
+    department: String(form.get("department") || "").trim() || null,
+    grade_year: form.get("grade_year") ? Number(form.get("grade_year")) : null,
+    gender: form.get("gender") || "undisclosed",
+    interests,
+    hobby_skills: skillName
+      ? [{ name: skillName, level: Number(form.get("register_skill_level")) }]
+      : [],
+    preferred_locations: splitList(form.get("preferred_locations")),
+    social_style: form.get("social_style") || "balanced",
+  };
+}
+
 async function handleRegister(event) {
   event.preventDefault();
   hideInlineError(elements.authError);
   elements.authAppealButton.classList.add("is-hidden");
   const button = event.submitter;
   setButtonLoading(button, true, "正在创建账号…");
-  const form = new FormData(elements.registerForm);
-  const interests = form.getAll("interests");
-  const skillName = String(form.get("register_skill_name") || "").trim();
+  const payload = registrationPayload();
+  const interests = payload.interests;
   if (!interests.length) {
     showInlineError(elements.authError, "至少选一个平时喜欢的活动，这样 Agent 才知道从哪里开始。 ");
     document.querySelector(".onboarding-choices").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -413,22 +448,7 @@ async function handleRegister(event) {
   try {
     const result = await api("/auth/register", {
       method: "POST",
-      body: JSON.stringify({
-        display_name: String(form.get("display_name")).trim(),
-        student_id: String(form.get("student_id")).trim(),
-        password: form.get("password"),
-        university: "南京理工大学",
-        campus: String(form.get("campus")).trim(),
-        department: String(form.get("department")).trim(),
-        grade_year: Number(form.get("grade_year")),
-        gender: form.get("gender"),
-        interests,
-        hobby_skills: skillName
-          ? [{ name: skillName, level: Number(form.get("register_skill_level")) }]
-          : [],
-        preferred_locations: splitList(form.get("preferred_locations")),
-        social_style: form.get("social_style"),
-      }),
+      body: JSON.stringify(payload),
     });
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
@@ -462,14 +482,15 @@ async function submitStudentAppeal(event) {
   setButtonLoading(button, true, "正在提交…");
   hideInlineError(elements.studentAppealStatus);
   const form = new FormData(elements.studentAppealForm);
+  const registration = registrationPayload();
+  if (registration.student_id.toUpperCase() === String(form.get("student_id")).toUpperCase()
+      && registration.password) {
+    form.append("registration_json", JSON.stringify(registration));
+  }
   try {
     const result = await api("/auth/student-id-appeals", {
       method: "POST",
-      body: JSON.stringify({
-        student_id: form.get("student_id"),
-        contact: String(form.get("contact")).trim(),
-        description: String(form.get("description") || "").trim() || null,
-      }),
+      body: form,
     });
     elements.studentAppealStatus.textContent = result.message;
     elements.studentAppealStatus.classList.add("is-success");
@@ -479,6 +500,83 @@ async function submitStudentAppeal(event) {
     showInlineError(elements.studentAppealStatus, error.message);
   } finally {
     setButtonLoading(button, false);
+  }
+}
+
+function renderIdentityReview(result) {
+  elements.identityReviewMessage.textContent = result.message;
+  elements.identityReviewDeadline.textContent = result.deadline
+    ? `请在 ${formatDate(result.deadline)} 前完成处理，逾期会自动交接学号。`
+    : "";
+  elements.identityCardForm.classList.toggle(
+    "is-hidden", !["awaiting_owner", "owner_review"].includes(result.status),
+  );
+  elements.identityContactForm.classList.toggle("is-hidden", result.status !== "manual_review");
+  elements.identityRelinquishButton.classList.toggle(
+    "is-hidden", !["awaiting_owner", "owner_review", "manual_review"].includes(result.status),
+  );
+}
+
+async function openIdentityReview() {
+  showAuthShell();
+  const result = await api("/auth/identity-review");
+  renderIdentityReview(result);
+  hideInlineError(elements.identityReviewStatus);
+  if (!elements.identityReviewDialog.open) elements.identityReviewDialog.showModal();
+}
+
+async function submitOwnerIdentityCard(event) {
+  event.preventDefault();
+  const button = event.submitter;
+  setButtonLoading(button, true, "正在审核…");
+  hideInlineError(elements.identityReviewStatus);
+  try {
+    const result = await api("/auth/identity-review/card", {
+      method: "POST",
+      body: new FormData(elements.identityCardForm),
+    });
+    renderIdentityReview(result);
+    elements.identityReviewStatus.textContent = result.message;
+    elements.identityReviewStatus.classList.add("is-success");
+    elements.identityReviewStatus.classList.remove("is-hidden");
+  } catch (error) {
+    showInlineError(elements.identityReviewStatus, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function submitOwnerIdentityContact(event) {
+  event.preventDefault();
+  const button = event.submitter;
+  setButtonLoading(button, true, "正在提交…");
+  try {
+    const result = await api("/auth/identity-review/contact", {
+      method: "POST",
+      body: JSON.stringify({contact: elements.identityContactForm.elements.contact.value.trim()}),
+    });
+    renderIdentityReview(result);
+    elements.identityReviewStatus.textContent = result.message;
+    elements.identityReviewStatus.classList.add("is-success");
+    elements.identityReviewStatus.classList.remove("is-hidden");
+  } catch (error) {
+    showInlineError(elements.identityReviewStatus, error.message);
+  } finally {
+    setButtonLoading(button, false);
+  }
+}
+
+async function relinquishIdentityAccount() {
+  if (!window.confirm("确认放弃这个账号？确认后无法撤回，学号会立即交接给申诉人。")) return;
+  setButtonLoading(elements.identityRelinquishButton, true, "正在交接…");
+  try {
+    const result = await api("/auth/identity-review/relinquish", {method: "POST"});
+    await logout(false);
+    elements.identityReviewDialog.close();
+    showToast(result.message);
+  } catch (error) {
+    showInlineError(elements.identityReviewStatus, error.message);
+    setButtonLoading(elements.identityRelinquishButton, false);
   }
 }
 
@@ -1959,6 +2057,7 @@ function populateProfileForm() {
   form.social_style.value = state.user.social_style || "balanced";
   form.preferred_group_min.value = state.user.preferred_group_min || 2;
   form.preferred_group_max.value = state.user.preferred_group_max || 6;
+  form.allow_invitations.checked = state.user.allow_invitations !== false;
   updateGroupRangeOutputs();
   elements.profileCredit.textContent = String(state.user.credit_score);
   renderHobbySkillEditor(state.user.hobby_skills || []);
@@ -2119,6 +2218,7 @@ function profilePayload() {
     social_style: form.get("social_style"),
     preferred_group_min: Number(form.get("preferred_group_min")),
     preferred_group_max: Number(form.get("preferred_group_max")),
+    allow_invitations: form.has("allow_invitations"),
   };
 }
 
@@ -2186,6 +2286,15 @@ function bindEvents() {
   elements.registerForm.addEventListener("submit", handleRegister);
   elements.claimStudentIdForm.addEventListener("submit", claimStudentId);
   elements.studentAppealForm.addEventListener("submit", submitStudentAppeal);
+  elements.identityCardForm.addEventListener("submit", submitOwnerIdentityCard);
+  elements.identityContactForm.addEventListener("submit", submitOwnerIdentityContact);
+  elements.identityRefreshButton.addEventListener("click", openIdentityReview);
+  elements.identityRelinquishButton.addEventListener("click", relinquishIdentityAccount);
+  elements.identityLogoutButton.addEventListener("click", async () => {
+    elements.identityReviewDialog.close();
+    await logout(false);
+  });
+  elements.identityReviewDialog.addEventListener("cancel", (event) => event.preventDefault());
   elements.authAppealButton.addEventListener("click", () => openStudentAppeal(elements.registerForm.elements.student_id.value));
   elements.claimAppealButton.addEventListener("click", () => openStudentAppeal(elements.claimStudentIdForm.elements.student_id.value));
   elements.registerForm.elements.student_id.addEventListener("input", () => elements.authAppealButton.classList.add("is-hidden"));
@@ -2442,6 +2551,11 @@ async function initialize() {
     return;
   }
   try {
+    const account = await api("/auth/account-state");
+    if (account.account_state === "identity_frozen") {
+      await openIdentityReview();
+      return;
+    }
     await loadCurrentUser();
     const initialTab = launch.get("tab");
     if (initialTab && ["match", "square", "invitations", "activities", "profile"].includes(initialTab)) switchTab(initialTab);

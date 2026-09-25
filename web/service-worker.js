@@ -1,5 +1,5 @@
-const CACHE = "dazi-shell-v21";
-const SHELL = ["/", "/static/styles.css?v=21", "/static/app.js?v=21", "/static/icon-192.png"];
+const CACHE = "dazi-shell-v22";
+const SHELL = ["/", "/static/styles.css?v=22", "/static/app.js?v=22", "/static/icon-192.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
