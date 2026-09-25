@@ -11,12 +11,15 @@ Zeabur 目前的新项目需要绑定一台服务器，但可以直接在 Zeabur
 1. 登录 [Zeabur](https://zeabur.com/)，连接 GitHub。创建项目时，选择“从 Zeabur 购买服务器”，在海外地区中比较价格；不要选中国大陆地区，以免触发备案前置条件。确认实际月费后再付款。
 2. 在项目里点击“部署新服务 → GitHub”，只授权所需的 `DrivingGodJ/ligong-dazi` 仓库，选择 `main` 分支。仓库根目录已有 `Dockerfile`，Zeabur 会按它构建。服务保持单副本。
 3. **在首次真实使用前挂载持久存储。** 给该服务添加 Volume，路径准确填 `/app/data`，建议代号为 `data`。数据库、活动照片、身份申诉材料和后台保存的 AI 设置都在这里。应用会在检测到 Zeabur 环境却没有该挂载时拒绝启动，以防数据误写到临时磁盘。
-4. 在服务“变量”里分别新增两个私密变量；不要把值提交到 GitHub 或发到聊天里：
+4. 在服务“变量”里分别新增下列私密变量；不要把值提交到 GitHub 或发到聊天里：
 
    | 变量名 | 内容 |
    | --- | --- |
    | `DAZI_JWT_SECRET` | 密码管理器生成、至少 32 位的随机字符串；以后不要随意更换 |
    | `DAZI_ADMIN_PASSWORD` | 至少 20 位、仅管理员知道的独立口令 |
+   | `DAZI_GETUI_APP_ID` | 个推“搭子局·应用版”的 App ID |
+   | `DAZI_GETUI_APP_KEY` | 个推 App Key，仅服务器保存 |
+   | `DAZI_GETUI_MASTER_SECRET` | 个推消息推送 Master Secret，仅服务器保存 |
 
    `Dockerfile` 已把生产模式、纯规则匹配模式及 `/app/data` 的数据库、活动照片和身份申诉材料路径设好，不要导入本机 `.env`，也不要重复使用之前公开过的 AI Key。
 5. 把 Health Check 路径设为 `/health/ready`。在“域名”里申请 Zeabur 提供的 HTTPS 子域名。打开“域名+/health/ready”，应显示 `status: ready`、`agent_mode: deterministic`；然后用新账号测试注册、登录、匹配和活动页。
@@ -28,6 +31,8 @@ Zeabur 目前的新项目需要绑定一台服务器，但可以直接在 Zeabur
 - 同一个 `/app/data` 持久卷现在还保存 Web Push 签名密钥。切勿删除该文件；否则已授权的手机需要重新打开通知。先在 `/api/v1/app/version` 核对安卓安装包是否部署，再访问 `/.well-known/assetlinks.json` 检查网站与 APK 的归属文件。
 - APK 通过 HTTPS 地址 `/downloads/ligong-dazi.apk` 下载，版本更新需要用户点开提示并确认系统安装；不会自动安装。iPhone 不需要 APK，使用 Safari「分享 → 添加到主屏幕」，从桌面打开并点「打开手机通知」。
 - Zeabur 单副本模式下每分钟检查一次开始前 15 分钟的活动提醒，通知同时进入站内消息；手机推送还须浏览器支持并经用户授权。上线后务必分别用 iPhone 桌面网页和安卓真机测试实际收取，不能只凭构建通过认定推送到达。
+- 原生应用版 `/downloads/ligong-dazi-native.apk` 使用个推系统通知。公开 App ID 已编译进 APK，App Key 与 Master Secret 必须只填在 Zeabur 私密变量；App Secret 暂不用于当前的客户端或 REST v2 下发流程，不要额外放进网页或 APK。
+- 目前只接入个推基础通道，未接手机厂商离线通道；应用被系统彻底结束后的送达率仍受手机后台策略影响。首次上线后至少用一台 Android 13+ 真机验证：登录、打开系统通知、收到测试邀请、点击通知进入正确页面、退出后不再收到该账号通知。
 
 ## 学号注册与旧账号
 

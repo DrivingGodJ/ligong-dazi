@@ -1,5 +1,6 @@
 package app.zeabur.ligongdazi.nativeapp;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.DownloadManager;
 import android.content.ActivityNotFoundException;
@@ -12,6 +13,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.content.pm.PackageManager;
 import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
@@ -35,6 +37,11 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
+import androidx.core.content.ContextCompat;
+
+import com.igexin.sdk.PushManager;
+
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -42,9 +49,11 @@ import java.nio.charset.StandardCharsets;
 
 /** A standalone Android window for the live site; never launches the site in a browser. */
 public class MainActivity extends Activity {
+    public static final String EXTRA_OPEN_URL = "dazi_open_url";
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=3";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=4";
     private static final int PICK_PHOTO = 10;
+    private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
     private LinearLayout loadingPanel;
     private TextView loadingDetail;
@@ -58,6 +67,7 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private Uri cameraUri;
     private boolean pageFailed;
+    private String pendingPushToken;
 
     private boolean isOurSite(Uri uri) {
         return "https".equalsIgnoreCase(uri.getScheme()) && HOST.equalsIgnoreCase(uri.getHost())
@@ -66,6 +76,7 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        PushManager.getInstance().preInit(getApplicationContext());
         getWindow().setStatusBarColor(Color.rgb(20, 17, 27));
         getWindow().setNavigationBarColor(Color.rgb(20, 17, 27));
 
@@ -136,8 +147,9 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/3");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/4");
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
+        webView.addJavascriptInterface(new PushBridge(), "LigongPush");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -220,8 +232,76 @@ public class MainActivity extends Activity {
             } catch (Exception e) { toast("下载未能开始，请稍后重试"); }
         });
 
-        if (savedInstanceState == null) webView.loadUrl(START_URL);
+        if (NativePushRegistrar.isEnabled(this) && notificationPermissionGranted()) {
+            initializeNativePush();
+        }
+        if (savedInstanceState == null) webView.loadUrl(resolveStartUrl(getIntent()));
         else webView.restoreState(savedInstanceState);
+    }
+
+    private String resolveStartUrl(Intent intent) {
+        String relative = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_URL);
+        if (relative != null && relative.startsWith("/") && !relative.startsWith("//")) {
+            String separator = relative.contains("?") ? "&" : "?";
+            return "https://" + HOST + relative + separator + "source=android-native&version=4";
+        }
+        return START_URL;
+    }
+
+    private boolean notificationPermissionGranted() {
+        return Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void initializeNativePush() {
+        PushManager.getInstance().initialize(getApplicationContext());
+    }
+
+    private void requestNativePush(String accessToken) {
+        if (accessToken == null || accessToken.length() < 24) return;
+        pendingPushToken = accessToken;
+        if (!notificationPermissionGranted() && Build.VERSION.SDK_INT >= 33) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    NOTIFICATION_PERMISSION);
+            return;
+        }
+        NativePushRegistrar.enable(this, accessToken);
+        initializeNativePush();
+        notifyPushStatus();
+    }
+
+    private void notifyPushStatus() {
+        if (webView == null) return;
+        JSONObject status = new JSONObject();
+        try {
+            status.put("enabled", NativePushRegistrar.isEnabled(this));
+            status.put("permission", notificationPermissionGranted());
+            status.put("connected", !NativePushRegistrar.getCid(this).isEmpty());
+        } catch (Exception ignored) {
+        }
+        webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('dazi-native-push-status',{detail:"
+                        + status.toString() + "}));",
+                null);
+    }
+
+    @Override public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NOTIFICATION_PERMISSION) return;
+        if (notificationPermissionGranted() && pendingPushToken != null) {
+            NativePushRegistrar.enable(this, pendingPushToken);
+            initializeNativePush();
+        }
+        pendingPushToken = null;
+        notifyPushStatus();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (webView != null) webView.loadUrl(resolveStartUrl(intent));
     }
 
     private int dp(int value) {
@@ -302,6 +382,38 @@ public class MainActivity extends Activity {
                     }
                 } catch (Exception e) { toast("日历文件无法打开，请稍后重试"); }
             });
+        }
+    }
+
+    private class PushBridge {
+        @JavascriptInterface public String status() {
+            JSONObject status = new JSONObject();
+            try {
+                status.put("enabled", NativePushRegistrar.isEnabled(MainActivity.this));
+                status.put("permission", notificationPermissionGranted());
+                status.put("connected", !NativePushRegistrar.getCid(MainActivity.this).isEmpty());
+            } catch (Exception ignored) {
+            }
+            return status.toString();
+        }
+
+        @JavascriptInterface public void enable(String accessToken) {
+            runOnUiThread(() -> requestNativePush(accessToken));
+        }
+
+        @JavascriptInterface public void sync(String accessToken) {
+            NativePushRegistrar.syncAccount(MainActivity.this, accessToken);
+            if (NativePushRegistrar.isEnabled(MainActivity.this)
+                    && notificationPermissionGranted()) {
+                runOnUiThread(() -> {
+                    initializeNativePush();
+                    notifyPushStatus();
+                });
+            }
+        }
+
+        @JavascriptInterface public void disable(String accessToken) {
+            NativePushRegistrar.disable(MainActivity.this, accessToken);
         }
     }
 

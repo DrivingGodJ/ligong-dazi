@@ -228,6 +228,15 @@ class PushSubscription(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
+class NativePushDevice(Base, TimestampMixin):
+    __tablename__ = "native_push_devices"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cid: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    platform: Mapped[str] = mapped_column(String(20), default="android")
+
+
 class ActivityPhoto(Base):
     __tablename__ = "activity_photos"
 

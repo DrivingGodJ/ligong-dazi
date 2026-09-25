@@ -154,8 +154,8 @@ async def test_college_choices_and_unknown_legacy_department_uses_default(
 async def test_separate_native_app_download_and_version(client: httpx.AsyncClient) -> None:
     version = await client.get("/api/v1/app/native-version")
     assert version.status_code == 200
-    assert version.json()["version_code"] == 3
-    assert version.json()["version_name"] == "1.2-beta"
+    assert version.json()["version_code"] == 4
+    assert version.json()["version_name"] == "1.3-beta"
     assert version.json()["download_url"] == "/downloads/ligong-dazi-native.apk"
     apk = await client.get("/downloads/ligong-dazi-native.apk")
     assert apk.status_code == 200

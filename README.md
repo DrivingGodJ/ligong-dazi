@@ -62,7 +62,7 @@ app/
   activity_media.py  集合照片清理与日历文件生成
   profile_summary.py AI 综合形象总结与无模型回退
   migrations.py     兼容已有本地 SQLite 数据的轻量升级
-  notifications.py  站内通知、Web Push 和活动开始提醒
+  notifications.py  站内通知、Web Push、原生安卓推送和活动开始提醒
   identity_verification.py 学生卡图片的审核 Agent 初审
   identity_appeals.py 申诉冻结、超时处理与学号安全交接
   models.py     用户、活动、邀请、匹配、信用等数据表
@@ -120,7 +120,11 @@ uv run python -m scripts.seed_demo
 
 手机弹窗是可选功能，拒绝系统权限时仍能在右上角铃铛查看所有消息。iPhone 须从 Safari 添加到主屏幕并从桌面图标打开，点「打开手机通知」授权；普通浏览器标签页无法代替这一流程。安卓 APK 使用 Trusted Web Activity 包装同一网站，安装后登录并主动授权。Web Push 密钥存放在持久存储 `DAZI_PUSH_KEY_FILE_PATH`（Zeabur 默认 `/app/data/vapid_private.pem`），不要删掉或重建，否则旧设备的订阅会失效。
 
-另有一个可并排安装的独立窗口内测版：`/downloads/ligong-dazi-native.apk`。它用 Android WebView 在应用里打开相同的线上站点，不再启动外部浏览器；首次连接和页面重载会显示加载状态，服务器响应超过 8 秒时会继续说明正在连接，失败后可直接重试。照片可从相册或相机选择，日历文件会交给系统应用打开。它的包名独立，登录状态不会从旧版或浏览器自动迁移，需要重新登录。**Android WebView 不支持沿用旧版 Web Push 订阅，内测版目前只有站内消息，没有系统弹窗推送**；要依赖赴约前提醒的用户应暂用旧版或浏览器版。尚未经过安卓真机验收，不要称其已正式替换原包。更新工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成独立签名 APK，版本号同时写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL；接口 `/api/v1/app/native-version` 提供内测版版本信息。以后接入可靠的原生推送并实测，再考虑替换正式下载入口。
+另有一个可并排安装的独立窗口应用版：`/downloads/ligong-dazi-native.apk`。它用 Android WebView 在应用里打开相同的线上站点，不再启动外部浏览器；首次连接和页面重载会显示加载状态，服务器响应超过 8 秒时会继续说明正在连接，失败后可直接重试。照片可从相册或相机选择，日历文件会交给系统应用打开。它的包名独立，登录状态不会从旧版或浏览器自动迁移，需要重新登录。
+
+应用版 `1.3-beta` 已接入个推原生通知。用户须在画像页主动打开，Android 13 及以上还会显示系统权限确认；本机推送标识随后绑定到当前账号，退出登录时解绑。服务器需要私密配置 `DAZI_GETUI_APP_ID`、`DAZI_GETUI_APP_KEY` 和 `DAZI_GETUI_MASTER_SECRET`，后两项绝不能写进 APK 或仓库。当前只接入个推基础通道，没有配置小米、华为、OPPO、vivo 等厂商离线通道，因此应用被系统彻底结束后的送达率会受手机后台策略影响。尚未经过安卓真机收发验收，不要把构建通过等同于可靠送达。
+
+应用版工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成原签名 APK；版本号同步写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL，接口 `/api/v1/app/native-version` 提供版本信息。安装包内只允许出现公开 App ID，App Key、App Secret 和 Master Secret 均不得进入客户端。
 
 安卓下载地址是 `/downloads/ligong-dazi.apk`，版本查询为 `/api/v1/app/version`。应用从桌面启动时记住内置版本号，服务器有更新会在画像页提示下载；系统会要求用户确认安装，不会静默覆盖。网站与 APK 的签名关联文件位于 `/.well-known/assetlinks.json`。源工程在 `android/`，安装包签名密钥 `android/android.keystore` 不会上传 GitHub，密码保存在当前 Mac 钥匙串 `ligong-dazi-android-signing`；两者缺一都无法为已安装用户发布可覆盖更新，请单独、安全备份。没有 Android 真机时，自动测试只能核验构建与签名，实际通知权限及安装升级仍需设备验收。
 

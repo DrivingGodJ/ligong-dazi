@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+from pydantic import SecretStr
 from sqlalchemy import select
 
-from app.models import Activity, Notification, User
+from app.models import Activity, NativePushDevice, Notification, User
 from app.notifications import dispatch_push, enqueue_activity_reminders
 from app.post_activity import process_completed_activities
 from tests.conftest import register_user
@@ -340,3 +341,47 @@ async def test_push_outbox_sends_once_and_rejects_unknown_endpoints(client, monk
         assert len(delivered) == 1
         assert json.loads(delivered[0]["data"])["title"] == "收到邀请"
         assert delivered[0]["ttl"] == 86_400
+
+
+async def test_native_push_device_binding_and_delivery(client, monkeypatch) -> None:
+    _, headers = await register_user(client, "native-push@example.com", "应用通知测试")
+    cid = "abcdef0123456789abcdef0123456789"
+    subscribed = await client.post(
+        "/api/v1/push/native/devices", headers=headers, json={"cid": cid}
+    )
+    assert subscribed.status_code == 201, subscribed.text
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.state.settings.getui_app_id = "test-app-id"
+    app.state.settings.getui_app_key = SecretStr("test-app-key")
+    app.state.settings.getui_master_secret = SecretStr("test-master-secret")
+    delivered: list[tuple[str, str]] = []
+
+    async def fake_native_push(settings, notification, target_cid):
+        delivered.append((notification.title, target_cid))
+        return True
+
+    monkeypatch.setattr("app.notifications._send_getui_notification", fake_native_push)
+    async with app.state.database.session_factory() as session:
+        device = await session.scalar(select(NativePushDevice).where(NativePushDevice.cid == cid))
+        session.add(
+            Notification(
+                user_id=device.user_id,
+                event_key="native:test",
+                kind="starts_soon",
+                title="活动快开始啦",
+                body="记得出发",
+                url="/?tab=activities",
+            )
+        )
+        await session.commit()
+        await dispatch_push(
+            session,
+            app.state.settings.push_key_file_path,
+            app.state.settings,
+        )
+        await session.commit()
+    assert delivered == [("活动快开始啦", cid)]
+
+    removed = await client.delete(f"/api/v1/push/native/devices/{cid}", headers=headers)
+    assert removed.status_code == 200

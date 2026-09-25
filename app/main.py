@@ -39,7 +39,11 @@ from app.post_activity import process_completed_activities
 logger = logging.getLogger(__name__)
 
 
-async def post_activity_maintenance(database: DatabaseRuntime, push_key_path: str) -> None:
+async def post_activity_maintenance(
+    database: DatabaseRuntime,
+    push_key_path: str,
+    settings: Settings,
+) -> None:
     while True:
         try:
             async with database.session_factory() as session:
@@ -50,7 +54,7 @@ async def post_activity_maintenance(database: DatabaseRuntime, push_key_path: st
                 await session.commit()
                 for appeal in transferred_appeals:
                     await asyncio.to_thread(remove_appeal_files, appeal)
-                await dispatch_push(session, push_key_path)
+                await dispatch_push(session, push_key_path, settings)
                 await session.commit()
         except Exception:
             logger.exception("活动结束后的画像分析任务执行失败")
@@ -111,7 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for appeal in transferred_appeals:
                 await asyncio.to_thread(remove_appeal_files, appeal)
         maintenance_task = asyncio.create_task(
-            post_activity_maintenance(database, app_settings.push_key_file_path)
+            post_activity_maintenance(database, app_settings.push_key_file_path, app_settings)
         )
         yield
         maintenance_task.cancel()

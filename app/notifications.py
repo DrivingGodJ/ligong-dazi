@@ -4,21 +4,37 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
+import time
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from pywebpush import WebPushException, webpush
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, ActivityMember, Notification, PushSubscription, User, utcnow
+from app.core import Settings
+from app.models import (
+    Activity,
+    ActivityMember,
+    NativePushDevice,
+    Notification,
+    PushSubscription,
+    User,
+    utcnow,
+)
 
 logger = logging.getLogger(__name__)
+_getui_token: str | None = None
+_getui_token_expires_at = 0
+_getui_token_identity: str | None = None
+_getui_token_lock = asyncio.Lock()
 
 
 def ensure_push_key(path: str) -> str:
@@ -122,7 +138,98 @@ async def enqueue_legacy_student_id_notices(session: AsyncSession) -> None:
         )
 
 
-async def dispatch_push(session: AsyncSession, private_key_path: str) -> None:
+async def _get_getui_token(settings: Settings, *, force: bool = False) -> str:
+    global _getui_token, _getui_token_expires_at, _getui_token_identity
+    if not settings.getui_enabled:
+        raise RuntimeError("个推服务端凭证未配置")
+    app_key = settings.getui_app_key.get_secret_value()  # type: ignore[union-attr]
+    master_secret = settings.getui_master_secret.get_secret_value()  # type: ignore[union-attr]
+    identity = hashlib.sha256(
+        f"{settings.getui_app_id}:{app_key}:{master_secret}".encode()
+    ).hexdigest()
+    now_ms = int(time.time() * 1000)
+    if (
+        not force
+        and _getui_token
+        and _getui_token_identity == identity
+        and _getui_token_expires_at > now_ms + 60_000
+    ):
+        return _getui_token
+    async with _getui_token_lock:
+        now_ms = int(time.time() * 1000)
+        if (
+            not force
+            and _getui_token
+            and _getui_token_identity == identity
+            and _getui_token_expires_at > now_ms + 60_000
+        ):
+            return _getui_token
+        sign = hashlib.sha256(f"{app_key}{now_ms}{master_secret}".encode()).hexdigest()
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.post(
+                f"https://restapi.getui.com/v2/{settings.getui_app_id}/auth",
+                json={"sign": sign, "timestamp": str(now_ms), "appkey": app_key},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") != 0 or not payload.get("data", {}).get("token"):
+            raise RuntimeError(f"个推鉴权失败（{payload.get('code', 'unknown')}）")
+        _getui_token = str(payload["data"]["token"])
+        _getui_token_expires_at = int(payload["data"].get("expire_time") or now_ms + 3_600_000)
+        _getui_token_identity = identity
+        return _getui_token
+
+
+async def _send_getui_notification(
+    settings: Settings,
+    notification: Notification,
+    cid: str,
+) -> bool:
+    """Deliver one native notification without exposing provider credentials in logs."""
+    payload_text = json.dumps({"url": notification.url}, ensure_ascii=False)
+    request_id = hashlib.sha256(
+        f"{notification.id}:{cid}:{notification.push_attempts}".encode()
+    ).hexdigest()[:32]
+    body = {
+        "request_id": request_id,
+        "settings": {"ttl": 900_000 if notification.kind == "starts_soon" else 86_400_000},
+        "audience": {"cid": [cid]},
+        "push_message": {
+            "notification": {
+                "title": notification.title,
+                "body": notification.body,
+                "big_text": notification.body,
+                "click_type": "payload",
+                "payload": payload_text,
+                "channel_id": "dazi_activity_updates",
+                "channel_name": "活动与搭子提醒",
+                "channel_level": 4,
+                "logo": "push.png",
+            }
+        },
+    }
+    for attempt in range(2):
+        token = await _get_getui_token(settings, force=attempt == 1)
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.post(
+                f"https://restapi.getui.com/v2/{settings.getui_app_id}/push/single/cid",
+                headers={"token": token},
+                json=body,
+            )
+        response.raise_for_status()
+        result = response.json()
+        if result.get("code") == 0:
+            return True
+        if result.get("code") != 10001:
+            raise RuntimeError(f"个推下发失败（{result.get('code', 'unknown')}）")
+    return False
+
+
+async def dispatch_push(
+    session: AsyncSession,
+    private_key_path: str,
+    settings: Settings | None = None,
+) -> None:
     """Outbox processing; push errors do not lose the in-app message."""
     pending = list(
         (
@@ -142,7 +249,15 @@ async def dispatch_push(session: AsyncSession, private_key_path: str) -> None:
                 )
             ).all()
         )
-        if not subscriptions:
+        native_devices = list(
+            (
+                await session.scalars(
+                    select(NativePushDevice).where(NativePushDevice.user_id == notification.user_id)
+                )
+            ).all()
+        )
+        native_delivery_enabled = bool(settings and settings.getui_enabled)
+        if not subscriptions and not (native_devices and native_delivery_enabled):
             notification.pushed_at = utcnow()
             continue
         failed = False
@@ -177,6 +292,14 @@ async def dispatch_push(session: AsyncSession, private_key_path: str) -> None:
             except Exception as exc:
                 failed = True
                 logger.warning("推送暂时失败：%s", type(exc).__name__)
+        if native_delivery_enabled:
+            for device in native_devices:
+                try:
+                    if not await _send_getui_notification(settings, notification, device.cid):
+                        failed = True
+                except Exception as exc:
+                    failed = True
+                    logger.warning("安卓系统通知暂时失败，将稍后重试：%s", type(exc).__name__)
         notification.push_attempts += 1
         if not failed:
             notification.pushed_at = utcnow()

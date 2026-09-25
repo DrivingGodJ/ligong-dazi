@@ -335,6 +335,7 @@ function showAuthenticatedShell() {
     }, 45_000);
   }
   refreshPushStatus();
+  syncNativePush();
 }
 
 function showAuthShell() {
@@ -346,6 +347,9 @@ function showAuthShell() {
 }
 
 async function logout(showMessage = true) {
+  if (IS_NATIVE_ANDROID && window.LigongPush && state.token) {
+    try { window.LigongPush.disable(state.token); } catch { /* Logout still completes. */ }
+  }
   if ("serviceWorker" in navigator) {
     try {
       const registration = await navigator.serviceWorker.getRegistration();
@@ -1499,11 +1503,32 @@ function renderActivityUpdates() {
 }
 
 function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function nativePushStatus() {
+  if (!IS_NATIVE_ANDROID || !window.LigongPush) return null;
+  try { return JSON.parse(window.LigongPush.status()); }
+  catch { return null; }
+}
+
+function syncNativePush() {
+  if (!IS_NATIVE_ANDROID || !window.LigongPush || !state.token) return;
+  try { window.LigongPush.sync(state.token); } catch { /* A later resume retries. */ }
+}
+
 async function refreshPushStatus() {
   const status = document.querySelector("#push-status");
+  const button = document.querySelector("#enable-push-button");
   if (IS_NATIVE_ANDROID) {
-    status.textContent = "应用版可以在这里查看所有站内消息；系统弹窗通知暂未接入，请不要依赖它提醒赴约。需要手机推送时仍可使用浏览器版。";
-    document.querySelector("#enable-push-button").classList.add("is-hidden");
+    const native = nativePushStatus();
+    if (native?.enabled && native?.permission) {
+      status.textContent = native.connected
+        ? "系统通知已连接；邀请、活动变动和开始前提醒会尝试送达。"
+        : "系统通知已允许，正在连接通知服务；首次连接可能需要一点时间。";
+      button.classList.add("is-hidden");
+    } else {
+      status.textContent = "打开后可在应用未显示时收到活动提醒。通知由个推协助送达，会处理本机的推送标识。";
+      button.textContent = native?.enabled ? "重新允许系统通知" : "打开系统通知";
+      button.classList.remove("is-hidden");
+    }
     return;
   }
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
@@ -1523,8 +1548,26 @@ function decodeVapidKey(value) {
 }
 
 async function enablePush() {
-  if (IS_NATIVE_ANDROID) return;
   const button = document.querySelector("#enable-push-button");
+  if (IS_NATIVE_ANDROID) {
+    if (!window.LigongPush || !state.token) {
+      showToast("通知服务暂时不可用，请更新应用后重试");
+      return;
+    }
+    setButtonLoading(button, true, "正在打开系统通知…");
+    try {
+      window.LigongPush.enable(state.token);
+      showToast("请按系统提示允许通知");
+      window.setTimeout(refreshPushStatus, 800);
+      window.setTimeout(refreshPushStatus, 3000);
+      window.setTimeout(refreshPushStatus, 8000);
+    } catch {
+      showToast("系统通知暂时无法打开，请稍后重试");
+    } finally {
+      window.setTimeout(() => setButtonLoading(button, false), 900);
+    }
+    return;
+  }
   if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
     showToast("请用 Safari 添加到主屏幕，然后从桌面打开搭子局");
     return;
@@ -2360,6 +2403,7 @@ function bindEvents() {
     }
   });
   document.querySelector("#enable-push-button").addEventListener("click", enablePush);
+  window.addEventListener("dazi-native-push-status", () => refreshPushStatus());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.token) loadNotifications();
     if (!document.hidden) checkAndroidRelease();

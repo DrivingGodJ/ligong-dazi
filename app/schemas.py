@@ -550,6 +550,10 @@ class PushSubscriptionRequest(ApiModel):
     auth: str = Field(min_length=8, max_length=512)
 
 
+class NativePushDeviceRequest(ApiModel):
+    cid: str = Field(min_length=16, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class NotificationPublic(ApiModel):
     id: str
     kind: str

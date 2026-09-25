@@ -11,8 +11,9 @@ android {
         applicationId 'app.zeabur.ligongdazi.nativeapp'
         minSdkVersion 23
         targetSdkVersion 35
-        versionCode 3
-        versionName "1.2-beta"
+        versionCode 4
+        versionName "1.3-beta"
+        manifestPlaceholders = [GETUI_APPID: "S4Lc1ylHbS8bCbKAAxkaD3"]
     }
 
     sourceSets.main.res.srcDirs += ['../app/src/main/res']
@@ -28,4 +29,6 @@ android {
 
 dependencies {
     implementation 'androidx.core:core:1.13.1'
+    implementation 'com.getui:gtsdk:3.3.16.0'
+    implementation 'com.getui:gtc:3.3.3.0'
 }

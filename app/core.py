@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     activity_photo_directory: str = "data/activity_photos"
     identity_appeal_directory: str = "data/student_id_appeals"
     push_key_file_path: str = "data/vapid_private.pem"
+    getui_app_id: str | None = None
+    getui_app_key: SecretStr | None = None
+    getui_master_secret: SecretStr | None = None
     activity_photo_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     identity_card_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
 
@@ -81,6 +84,16 @@ class Settings(BaseSettings):
         if self.ai_provider == "openai_compatible":
             return True
         return bool(self.ai_api_key and self.ai_api_key.get_secret_value())
+
+    @property
+    def getui_enabled(self) -> bool:
+        return bool(
+            self.getui_app_id
+            and self.getui_app_key
+            and self.getui_app_key.get_secret_value()
+            and self.getui_master_secret
+            and self.getui_master_secret.get_secret_value()
+        )
 
 
 @lru_cache

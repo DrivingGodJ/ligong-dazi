@@ -66,6 +66,7 @@ from app.models import (
     JoinApproval,
     MatchCandidate,
     MatchRequest,
+    NativePushDevice,
     Notification,
     PeerFeedbackReview,
     PushSubscription,
@@ -118,6 +119,7 @@ from app.schemas import (
     MatchPreviewRequest,
     MatchPreviewResponse,
     MyActivityItem,
+    NativePushDeviceRequest,
     NotificationPublic,
     PeerReviewCreate,
     PeerReviewResult,
@@ -2649,6 +2651,44 @@ async def remove_push_subscription(
         delete(PushSubscription).where(
             PushSubscription.user_id == current_user.id,
             PushSubscription.endpoint == endpoint,
+        )
+    )
+    await session.commit()
+    return {"status": "unsubscribed"}
+
+
+@router.post("/push/native/devices", status_code=201)
+async def save_native_push_device(
+    payload: NativePushDeviceRequest,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> dict[str, str]:
+    """Bind one Getui CID to the currently signed-in account."""
+    device = await session.scalar(
+        select(NativePushDevice).where(NativePushDevice.cid == payload.cid)
+    )
+    if device is None:
+        session.add(NativePushDevice(user_id=current_user.id, cid=payload.cid))
+    else:
+        device.user_id = current_user.id
+        device.platform = "android"
+        device.updated_at = utcnow()
+    await session.commit()
+    return {"status": "subscribed"}
+
+
+@router.delete("/push/native/devices/{cid}")
+async def remove_native_push_device(
+    cid: str,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> dict[str, str]:
+    if not 16 <= len(cid) <= 160 or not cid.replace("_", "").replace("-", "").isalnum():
+        raise HTTPException(status_code=422, detail="设备通知标识无效")
+    await session.execute(
+        delete(NativePushDevice).where(
+            NativePushDevice.user_id == current_user.id,
+            NativePushDevice.cid == cid,
         )
     )
     await session.commit()
