@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 240" role="img" aria-labelledby="title desc">
+  <title id="title">活动广场花花</title><desc id="desc">拿着小喇叭的紫色花朵。</desc>
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7240D9"/><stop offset="1" stop-color="#A75FF0"/></linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E1BFFF"/><stop offset="1" stop-color="#AC68EC"/></linearGradient>
+    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#88CB72"/><stop offset="1" stop-color="#4B9B55"/></linearGradient>
+    <filter id="s" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="9" stdDeviation="9" flood-color="#4B218C" flood-opacity=".17"/></filter>
+  </defs>
+  <path d="M154 133c-1 25 0 50 2 78" fill="none" stroke="#56AA67" stroke-width="9" stroke-linecap="round"/>
+  <path d="M153 181c-30-23-48-14-49 5 20 17 38 15 49-5Zm5 12c25-25 45-18 48 0-16 18-35 19-48 0Z" fill="url(#l)"/>
+  <g filter="url(#s)"><path d="M153 111c-33 7-67-8-71-36-4-28 20-43 45-36 28 8 41 38 26 72Z" fill="url(#a)"/><path d="M155 112c4-31 30-55 57-49 25 6 31 32 15 52-18 23-50 25-72-3Z" fill="url(#b)"/><path d="M151 115c-29-13-61-2-70 24-8 24 11 43 36 42 29-1 47-32 34-66Z" fill="url(#b)"/><path d="M156 116c30-5 60 13 63 40 3 25-20 39-43 32-27-8-39-41-20-72Z" fill="url(#a)"/></g>
+  <g fill="#FFE78A"><ellipse cx="154" cy="101" rx="9" ry="17"/><ellipse cx="167" cy="113" rx="17" ry="9"/><ellipse cx="155" cy="126" rx="9" ry="17"/><ellipse cx="142" cy="113" rx="17" ry="9"/><circle cx="155" cy="113" r="8" fill="#FFC43E"/></g>
+  <g fill="#26183E"><ellipse cx="174" cy="151" rx="4" ry="6"/><ellipse cx="197" cy="149" rx="4" ry="6"/></g><path d="M180 161c5 7 13 6 17-.5" fill="none" stroke="#26183E" stroke-width="5" stroke-linecap="round"/>
+  <g transform="translate(24 116) rotate(-12)"><path d="m40 29-2 21h12l5-22" fill="#7541CC"/><path d="M17 5 61 18v18L17 47Z" fill="#A774EA"/><rect x="57" y="17" width="17" height="20" rx="7" fill="#7743CA"/><ellipse cx="17" cy="26" rx="12" ry="22" fill="#8050CE"/><ellipse cx="17" cy="26" rx="7" ry="16" fill="#EEE0FF"/></g>
+  <path d="M58 102 49 89m22 8-1-15m-30 30-15-2" fill="none" stroke="#8753DE" stroke-width="5" stroke-linecap="round" opacity=".7"/>
+</svg>

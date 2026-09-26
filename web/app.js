@@ -32,6 +32,7 @@ const state = {
   notificationTimer: null,
   notificationLoadRevision: 0,
   runningTimer: null,
+  resultEnterTimer: null,
   summaryTimer: null,
   toastTimer: null,
   skillRowCounter: 0,
@@ -92,12 +93,16 @@ const elements = {
   registerForm: document.querySelector("#register-form"),
   matchForm: document.querySelector("#match-form"),
   matchSubmit: document.querySelector("#match-submit"),
+  resultPanel: document.querySelector(".result-panel"),
   resultEmpty: document.querySelector("#result-empty"),
   resultRunning: document.querySelector("#result-running"),
   resultContent: document.querySelector("#result-content"),
   resultSuccess: document.querySelector("#result-success"),
   matchError: document.querySelector("#match-error"),
   runningTitle: document.querySelector("#running-title"),
+  runningSubtitle: document.querySelector(".running-subtitle"),
+  runningModelLabel: document.querySelector("#running-model-label"),
+  matchGreetingName: document.querySelector("#match-greeting-name"),
   progressBar: document.querySelector("#progress-bar"),
   resultSummary: document.querySelector("#result-summary"),
   candidateList: document.querySelector("#candidate-list"),
@@ -250,10 +255,14 @@ function showInlineError(element, message) {
 
 function setAgentModeLabel(mode, model) {
   const modelName = String(model || "").trim();
-  elements.agentModeLabel.textContent =
+  const label =
     (mode === "llm" || mode === "openai_compatible") && modelName
       ? `${modelName} 为你服务`
       : "规则匹配为你服务";
+  elements.agentModeLabel.textContent = label;
+  if (elements.runningModelLabel) {
+    elements.runningModelLabel.textContent = label.replace("为你服务", "正在思考");
+  }
   elements.agentModePill.title =
     mode === "deterministic" ? "当前使用规则匹配，没有调用 AI 模型" : "当前匹配方式";
 }
@@ -324,6 +333,7 @@ function showAuthenticatedShell() {
   elements.mainNav.classList.remove("is-hidden");
   elements.accountArea.classList.remove("is-hidden");
   elements.accountName.textContent = state.user.display_name;
+  if (elements.matchGreetingName) elements.matchGreetingName.textContent = state.user.display_name;
   populateProfileForm();
   updatePeopleNeededOutput();
   loadInvitations(true);
@@ -340,6 +350,7 @@ function showAuthenticatedShell() {
 
 function showAuthShell() {
   document.body.classList.remove("has-app");
+  document.body.classList.remove("is-agent-searching");
   elements.authView.classList.remove("is-hidden");
   elements.appView.classList.add("is-hidden");
   elements.mainNav.classList.add("is-hidden");
@@ -618,6 +629,10 @@ function switchTab(tabName) {
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("is-hidden", panel.dataset.panel !== tabName);
   });
+  if (tabName !== "match") {
+    document.body.classList.remove("is-agent-searching");
+    elements.resultRunning.classList.remove("is-completing");
+  }
   if (tabName === "invitations") loadInvitations();
   if (tabName === "activities") {
     loadActivities();
@@ -644,20 +659,32 @@ function initializeDates() {
 }
 
 function setResultView(view) {
+  window.clearTimeout(state.resultEnterTimer);
   elements.resultEmpty.classList.toggle("is-hidden", view !== "empty");
   elements.resultRunning.classList.toggle("is-hidden", view !== "running");
   elements.resultContent.classList.toggle("is-hidden", view !== "content");
   elements.resultSuccess.classList.toggle("is-hidden", view !== "success");
   elements.confirmBar.classList.toggle("is-hidden", view !== "content");
+  elements.resultPanel.classList.toggle("is-idle", view === "empty");
+  elements.resultPanel.setAttribute("aria-busy", String(view === "running"));
+  document.body.classList.toggle("is-agent-searching", view === "running");
+  if (view !== "running") elements.resultRunning.classList.remove("is-completing");
+  if (view === "content") {
+    elements.resultPanel.classList.add("is-results-entering");
+    state.resultEnterTimer = window.setTimeout(() => elements.resultPanel.classList.remove("is-results-entering"), 560);
+  } else {
+    elements.resultPanel.classList.remove("is-results-entering");
+  }
 }
 
 function startRunningProgress() {
   const stepIds = ["step-activities", "step-users", "step-score"];
-  const titles = ["正在查询可加入的活动", "正在寻找时间合适的用户", "正在计算可解释匹配度"];
+  const titles = ["正在理解活动类型、时间和偏好…", "正在匹配兴趣、时间和地点位置…", "正在整理自然、清楚的邀请理由…"];
   let index = 0;
   stepIds.forEach((id) => document.querySelector(`#${id}`).classList.remove("is-current", "is-done"));
   document.querySelector(`#${stepIds[0]}`).classList.add("is-current");
-  elements.runningTitle.textContent = titles[0];
+  elements.runningTitle.textContent = "花花正在帮你找搭子";
+  elements.runningSubtitle.textContent = titles[0];
   elements.progressBar.style.width = "24%";
   window.clearInterval(state.runningTimer);
   state.runningTimer = window.setInterval(() => {
@@ -666,7 +693,7 @@ function startRunningProgress() {
     document.querySelector(`#${stepIds[index]}`).classList.add("is-done");
     index += 1;
     document.querySelector(`#${stepIds[index]}`).classList.add("is-current");
-    elements.runningTitle.textContent = titles[index];
+    elements.runningSubtitle.textContent = titles[index];
     elements.progressBar.style.width = `${54 + index * 22}%`;
   }, 650);
 }
@@ -678,6 +705,12 @@ function finishRunningProgress() {
     item.classList.add("is-done");
   });
   elements.progressBar.style.width = "100%";
+  elements.runningSubtitle.textContent = "已经找到结果，马上带你去看看…";
+}
+
+function animationDelay(milliseconds) {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return Promise.resolve();
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function getCategory(form) {
@@ -687,11 +720,18 @@ function getCategory(form) {
     : selected;
 }
 
-function syncCategoryChoice() {
+function syncCategoryChoice(focusWhenOpened = false) {
   const customSelected = elements.matchForm.elements.category.value === "__custom__";
   const field = document.querySelector(".other-category-input");
-  field.classList.toggle("is-hidden", !customSelected);
-  elements.matchForm.elements.custom_category.required = customSelected;
+  const input = elements.matchForm.elements.custom_category;
+  field.classList.toggle("is-expanded", customSelected);
+  field.classList.toggle("is-collapsed", !customSelected);
+  field.setAttribute("aria-hidden", String(!customSelected));
+  input.disabled = !customSelected;
+  input.required = customSelected;
+  if (customSelected && focusWhenOpened) {
+    window.requestAnimationFrame(() => input.focus());
+  }
 }
 
 function updatePeopleNeededOutput() {
@@ -734,6 +774,8 @@ function clearMatchRequestAfterAgentError() {
 
 async function handleMatch(event) {
   event.preventDefault();
+  const requestError = document.querySelector("#match-request-error");
+  hideInlineError(requestError);
   const form = new FormData(elements.matchForm);
   if (!getCategory(form)) {
     showInlineError(elements.matchError, "先选择活动类型；选“其他活动”后还需要写下名称。");
@@ -747,6 +789,7 @@ async function handleMatch(event) {
   hideInlineError(elements.matchError);
   state.selectedUsers.clear();
   state.selectedActivity = null;
+  const searchStartedAt = performance.now();
   setResultView("running");
   startRunningProgress();
   setButtonLoading(elements.matchSubmit, true, "Agent 正在匹配…");
@@ -765,7 +808,6 @@ async function handleMatch(event) {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    finishRunningProgress();
     state.preview = {
       ...preview,
       requestedCount: payload.people_needed,
@@ -776,7 +818,14 @@ async function handleMatch(event) {
     elements.confirmLocation.value = "";
     elements.confirmLocationError.classList.add("is-hidden");
     renderMatchResult();
-    window.setTimeout(() => setResultView("content"), 180);
+    const minimumVisibleTime = 1050;
+    const remaining = Math.max(0, minimumVisibleTime - (performance.now() - searchStartedAt));
+    await animationDelay(remaining);
+    finishRunningProgress();
+    await animationDelay(220);
+    elements.resultRunning.classList.add("is-completing");
+    await animationDelay(300);
+    setResultView("content");
   } catch (error) {
     window.clearInterval(state.runningTimer);
     if (error.code === "agent_output_error") {
@@ -785,7 +834,9 @@ async function handleMatch(event) {
     } else {
       setResultView("empty");
     }
-    showInlineError(elements.matchError, error.message);
+    showInlineError(requestError, error.message);
+    showToast(error.message);
+    requestError.scrollIntoView({ block: "center", behavior: "smooth" });
   } finally {
     setButtonLoading(elements.matchSubmit, false);
   }
@@ -1094,7 +1145,7 @@ async function loadSquare(append = false) {
 function renderSquare() {
   elements.squareLoadMore.classList.toggle("is-hidden", !state.squareHasMore);
   if (!state.squareItems.length) {
-    elements.squareList.innerHTML = `<div class="empty-list empty-list-playful"><strong>暂时没有符合筛选条件的活动，换个地点或类型看看吧。</strong></div>`;
+    elements.squareList.innerHTML = `<div class="empty-list empty-list-playful"><img src="/static/mascot-bloom.svg" alt="" aria-hidden="true" /><strong>暂时没有符合筛选条件的活动</strong><p>换个地点、日期或活动类型看看吧。</p></div>`;
     return;
   }
   elements.squareList.innerHTML = state.squareItems
@@ -1269,11 +1320,11 @@ function renderActivities() {
   const activities = filteredActivities();
   if (!activities.length) {
     const emptyCopy = {
-      upcoming: "接下来还没有安排。去“找搭子”发起一场，给日程添点新鲜事。",
-      review: "没有欠下的评价，干干净净。活动结束后，这里会提醒你写几句。",
-      history: "活动足迹还是空的，第一场正在等你。",
+      upcoming: ["接下来还没有安排。", "去“找搭子”发起一场，给日程添点新鲜事。"],
+      review: ["现在没有待评价的活动", "活动结束后，这里会提醒你认真写几句。"],
+      history: ["活动足迹还是空的", "第一场有趣的相遇正在等你。"],
     }[state.activityFilter];
-    elements.activityList.innerHTML = `<div class="empty-list empty-list-playful"><strong>${escapeHtml(emptyCopy)}</strong></div>`;
+    elements.activityList.innerHTML = `<div class="empty-list empty-list-playful"><img src="/static/mascot-bloom.svg" alt="" aria-hidden="true" /><strong>${escapeHtml(emptyCopy[0])}</strong><p>${escapeHtml(emptyCopy[1])}</p></div>`;
     return;
   }
   elements.activityList.innerHTML = activities
@@ -1494,15 +1545,35 @@ function renderActivityUpdates() {
   elements.activityUpdates.innerHTML = updates.map((item) => {
     const arriving = !state.activityUpdateSeenIds.has(item.id);
     state.activityUpdateSeenIds.add(item.id);
+    const updateIcon = item.kind === "time_vote"
+      ? `<svg viewBox="0 0 24 24"><path d="M12 7v5l3 2M4 5h16v15H4V5Zm4-2v4m8-4v4" /></svg>`
+      : `<svg viewBox="0 0 24 24"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 10v-2a6 6 0 0 0-6-6H7a6 6 0 0 0-6 6v2m17-9v6m-3-3h6" /></svg>`;
     return `<article class="activity-update ${arriving ? "is-arriving" : ""}">
-      <span class="activity-update-icon" aria-hidden="true">${item.kind === "time_vote" ? "🕒" : "🙋"}</span>
+      <span class="activity-update-icon" aria-hidden="true">${updateIcon}</span>
       <div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.body)}</p></div>
       <button class="button button-quiet" type="button" data-activity-update-id="${escapeHtml(item.id)}" data-activity-update-kind="${escapeHtml(item.kind)}" data-activity-update-url="${escapeHtml(item.url)}">去看看</button>
     </article>`;
   }).join("");
 }
 
-function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+function isIos() { return /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); }
+
+function isInstalledApp() {
+  return IS_NATIVE_ANDROID || navigator.standalone === true
+    || window.matchMedia("(display-mode: standalone)").matches
+    || window.matchMedia("(display-mode: fullscreen)").matches
+    || document.referrer.startsWith("android-app://");
+}
+
+function refreshInstallHint() {
+  const installed = isInstalledApp();
+  const link = document.querySelector("#profile-apk-link");
+  const androidBrowser = /Android/i.test(navigator.userAgent) && !installed;
+  link.classList.toggle("is-hidden", !androidBrowser);
+  link.href = "/downloads/ligong-dazi-native.apk";
+  link.textContent = "下载安卓 APK";
+  document.querySelector("#profile-ios-install").classList.toggle("is-hidden", !isIos() || installed);
+}
 function nativePushStatus() {
   if (!IS_NATIVE_ANDROID || !window.LigongPush) return null;
   try { return JSON.parse(window.LigongPush.status()); }
@@ -1515,6 +1586,7 @@ function syncNativePush() {
 }
 
 async function refreshPushStatus() {
+  refreshInstallHint();
   const status = document.querySelector("#push-status");
   const button = document.querySelector("#enable-push-button");
   if (IS_NATIVE_ANDROID) {
@@ -1531,12 +1603,15 @@ async function refreshPushStatus() {
     }
     return;
   }
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    status.textContent = "当前浏览器不支持手机推送；站内消息仍可查看。";
+  if (isIos() && !isInstalledApp()) {
+    status.textContent = "添加到主屏幕后，可以开启活动通知；站内消息始终可用。";
+    button.classList.add("is-hidden");
     return;
   }
-  if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
-    status.textContent = "iPhone 请先在 Safari 点分享 → 添加到主屏幕，再从桌面打开并点下方按钮授权。";
+  button.classList.remove("is-hidden");
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+    status.textContent = "当前浏览器不支持手机推送；站内消息仍可查看。";
+    button.classList.add("is-hidden");
     return;
   }
   status.textContent = Notification.permission === "granted" ? "手机通知已授权；邀请和活动动态将尝试送达。" : "点下方按钮授权手机通知；站内消息始终可用。";
@@ -1568,7 +1643,7 @@ async function enablePush() {
     }
     return;
   }
-  if (isIos() && !window.matchMedia("(display-mode: standalone)").matches && !navigator.standalone) {
+  if (isIos() && !isInstalledApp()) {
     showToast("请用 Safari 添加到主屏幕，然后从桌面打开搭子局");
     return;
   }
@@ -1596,20 +1671,27 @@ async function enablePush() {
 }
 
 async function checkAndroidRelease() {
+  refreshInstallHint();
   if (!/Android/i.test(navigator.userAgent)) return;
   try {
     const response = await fetch(IS_NATIVE_ANDROID ? "/api/v1/app/native-version" : "/api/v1/app/version", {cache: "no-store"});
     if (!response.ok) return;
     const release = await response.json();
     if (!release.available) return;
-    document.querySelectorAll(IS_NATIVE_ANDROID ? "#profile-apk-link" : "#android-download-link, #profile-apk-link").forEach((link) => {
+    document.querySelectorAll(IS_NATIVE_ANDROID ? "#profile-apk-update" : "#android-download-link").forEach((link) => {
       link.href = release.download_url;
-      link.classList.remove("is-hidden");
+      link.classList.toggle("is-hidden", isInstalledApp());
       if (IS_NATIVE_ANDROID) link.textContent = "查看应用版安装包";
     });
-    const installedVersion = Number(localStorage.getItem(IS_NATIVE_ANDROID ? "dazi_native_app_version" : "dazi_android_app_version") || 0);
-    if (installedVersion && release.version_code > installedVersion) {
-      document.querySelector("#profile-apk-link").textContent = `有新版 ${release.version_name}，点此下载安装`;
+    const installedVersion = IS_NATIVE_ANDROID
+      ? Number(navigator.userAgent.match(/LigongDaziNative\/(\d+)/)?.[1] || 0)
+      : Number(localStorage.getItem("dazi_android_app_version") || 0);
+    const updateLink = document.querySelector("#profile-apk-update");
+    updateLink.classList.add("is-hidden");
+    if (isInstalledApp() && installedVersion && release.version_code > installedVersion) {
+      updateLink.href = release.download_url;
+      updateLink.classList.remove("is-hidden");
+      updateLink.textContent = `更新至 ${release.version_name}`;
       if (sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
         showToast("安卓应用有新版本，到我的画像下载更新");
         sessionStorage.setItem("dazi_android_notice", String(release.version_code));
@@ -2450,7 +2532,7 @@ function bindEvents() {
   });
 
   elements.matchForm.addEventListener("submit", handleMatch);
-  elements.matchForm.querySelector("#category-choices").addEventListener("change", syncCategoryChoice);
+  elements.matchForm.querySelector("#category-choices").addEventListener("change", () => syncCategoryChoice(true));
   elements.matchForm.elements.people_needed.addEventListener("input", updatePeopleNeededOutput);
   elements.confirmLocation.addEventListener("input", () => {
     if (elements.confirmLocation.value.trim()) elements.confirmLocationError.classList.add("is-hidden");
@@ -2589,6 +2671,7 @@ async function initialize() {
   checkAndroidRelease();
   initializeDates();
   elements.confirmButton.disabled = true;
+  setResultView("empty");
   loadAgentMode();
   if (!state.token) {
     showAuthShell();

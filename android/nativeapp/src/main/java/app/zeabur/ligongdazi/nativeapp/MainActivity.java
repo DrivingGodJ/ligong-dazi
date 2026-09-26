@@ -51,7 +51,7 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends Activity {
     public static final String EXTRA_OPEN_URL = "dazi_open_url";
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=4";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=5";
     private static final int PICK_PHOTO = 10;
     private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
@@ -147,7 +147,7 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/4");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/5");
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
         webView.addJavascriptInterface(new PushBridge(), "LigongPush");
 
@@ -243,7 +243,7 @@ public class MainActivity extends Activity {
         String relative = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_URL);
         if (relative != null && relative.startsWith("/") && !relative.startsWith("//")) {
             String separator = relative.contains("?") ? "&" : "?";
-            return "https://" + HOST + relative + separator + "source=android-native&version=4";
+            return "https://" + HOST + relative + separator + "source=android-native&version=5";
         }
         return START_URL;
     }

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">理工搭子局花朵标志</title>
+  <desc id="desc">四片紫色圆润花瓣围绕黄色小花，右下花瓣带有笑脸。</desc>
+  <defs>
+    <linearGradient id="petalA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7744DE"/>
+      <stop offset="1" stop-color="#A567F1"/>
+    </linearGradient>
+    <linearGradient id="petalB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D8AEFF"/>
+      <stop offset="1" stop-color="#A961EC"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFF4AE"/>
+      <stop offset="1" stop-color="#FFC84C"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#5B2AAF" flood-opacity=".18"/>
+    </filter>
+  </defs>
+  <rect x="5" y="5" width="118" height="118" rx="34" fill="#FCFAFF"/>
+  <g filter="url(#shadow)">
+    <path d="M66 63C48 66 28 56 24 39c-4-17 9-29 25-28 18 1 31 20 27 39-2 8-5 11-10 13Z" fill="url(#petalA)"/>
+    <path d="M66 64c0-18 12-36 29-39 16-3 28 8 28 24 0 18-16 31-36 29-9-1-15-6-21-14Z" fill="url(#petalB)"/>
+    <path d="M63 66c-16-7-36-3-45 11-9 14-1 30 15 34 18 4 36-9 40-28 2-8-2-13-10-17Z" fill="url(#petalB)"/>
+    <path d="M66 67c18-3 38 6 44 23 5 16-6 29-22 30-19 1-34-16-33-35 0-9 4-14 11-18Z" fill="url(#petalA)"/>
+  </g>
+  <g fill="url(#sun)">
+    <ellipse cx="64" cy="58" rx="7" ry="12" transform="rotate(-22 64 58)"/>
+    <ellipse cx="72" cy="64" rx="12" ry="7" transform="rotate(-25 72 64)"/>
+    <ellipse cx="66" cy="73" rx="7" ry="12" transform="rotate(-22 66 73)"/>
+    <ellipse cx="57" cy="67" rx="12" ry="7" transform="rotate(-25 57 67)"/>
+    <circle cx="64.5" cy="65" r="6" fill="#FFC43E"/>
+  </g>
+  <g fill="#251A3D">
+    <ellipse cx="74" cy="91" rx="2.8" ry="4.3"/>
+    <ellipse cx="91" cy="89" rx="2.8" ry="4.3"/>
+  </g>
+  <path d="M79 97c3.1 4.1 8.6 4 11.2-.4" fill="none" stroke="#251A3D" stroke-width="3.5" stroke-linecap="round"/>
+</svg>
