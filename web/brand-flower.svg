@@ -18,7 +18,8 @@
       <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#5B2AAF" flood-opacity=".18"/>
     </filter>
   </defs>
-  <rect x="5" y="5" width="118" height="118" rx="34" fill="#FCFAFF"/>
+  <style>@media(prefers-color-scheme:dark){.logo-tile{fill:#30223f;stroke:#61457b;stroke-width:1.5}}</style>
+  <rect class="logo-tile" x="5" y="5" width="118" height="118" rx="34" fill="#FCFAFF"/>
   <g filter="url(#shadow)">
     <path d="M66 63C48 66 28 56 24 39c-4-17 9-29 25-28 18 1 31 20 27 39-2 8-5 11-10 13Z" fill="url(#petalA)"/>
     <path d="M66 64c0-18 12-36 29-39 16-3 28 8 28 24 0 18-16 31-36 29-9-1-15-6-21-14Z" fill="url(#petalB)"/>

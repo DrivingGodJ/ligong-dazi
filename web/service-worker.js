@@ -1,5 +1,5 @@
-const CACHE = "dazi-shell-v28";
-const SHELL = ["/", "/static/styles.css?v=23", "/static/visual-language.css?v=2", "/static/reference-ui.css?v=6", "/static/app.js?v=27", "/static/brand-flower.svg", "/static/mascot-bloom.svg", "/static/mascot-square.svg", "/static/mascot-activities.svg", "/static/mascot-invitations.svg", "/static/thinking-flower.svg", "/static/floral-canvas.svg", "/static/floral-canvas-dark.svg", "/static/icon-192.png"];
+const CACHE = "dazi-shell-v31";
+const SHELL = ["/", "/static/styles.css?v=23", "/static/visual-language.css?v=2", "/static/reference-ui.css?v=8", "/static/app.js?v=30", "/static/brand-flower.svg?v=2", "/static/mascot-bloom.svg", "/static/mascot-square.svg", "/static/mascot-activities.svg", "/static/mascot-invitations.svg", "/static/thinking-flower.svg", "/static/floral-canvas.svg", "/static/floral-canvas-dark.svg", "/static/icon-192.png", "/static/launch-art.html"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

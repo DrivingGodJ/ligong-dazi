@@ -337,8 +337,8 @@ body.is-agent-searching > .main-nav { pointer-events: none; }
 .search-hand-note { width: min(100%, 430px); margin: 1rem 0 -2rem; padding-right: 0.2rem; text-align: right; }
 
 #result-running .agent-orbit {
-  width: clamp(190px, 58vw, 250px);
-  height: clamp(190px, 58vw, 250px);
+  width: clamp(240px, 76vw, 310px);
+  height: clamp(240px, 76vw, 310px);
   margin: 0 auto -0.1rem;
   animation: flower-think 2.2s ease-in-out infinite;
 }
@@ -811,6 +811,7 @@ body > .main-nav .nav-button.is-active .nav-face-icon circle:first-child { filte
   .running-notice,
   .running-model-pill,
   .confirm-bar,
+  .confirm-bar.needs-location,
   .invitation-preference-wide { background: rgb(40 32 49 / 96%); border-color: #4d3e5a; }
   .profile-feature-grid p,
   .invitation-preference-wide .invitation-preference-copy small,
@@ -837,6 +838,7 @@ body > .main-nav .nav-button.is-active .nav-face-icon circle:first-child { filte
   .field-icon-filled { fill: #be97ff; }
   .section-title-icon, .invitation-setting-icon { color: #cfb4ff; background: #403050; }
   .notification-trigger { color: #ceb1ff; background: #30243e; border-color: #615073; }
+  .brand-mark { background: #30223f; }
   .modal-close, .skill-remove { color: #d8baff; background: #3b2c4c; border: 1px solid #715886; }
   .modal-close:hover, .skill-remove:hover { color: #f0e5ff; background: #503466; border-color: #b489df; }
   .modal-close:focus-visible, .skill-remove:focus-visible { outline: 2px solid #c99bff; outline-offset: 3px; }
@@ -854,6 +856,28 @@ body > .main-nav .nav-button.is-active .nav-face-icon circle:first-child { filte
   .confirmation-location .confirmation-error { color: #ffadbd; }
   #profile-ios-install { color: #d7c7e8; background: #34263f; border-color: #655077; }
   .profile-feature-grid .button-quiet { color: #dec6ff; background: #362744; border-color: #775b95; }
+  .running-notice > span { background: #403050; color: #d8baff; }
+}
+
+/* Keep native Safari date controls inside their grid tracks. */
+.two-columns > label, .square-filters > label { min-width: 0; }
+input[type="date"], input[type="datetime-local"] {
+  display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%;
+  -webkit-appearance: none; appearance: none;
+}
+input::-webkit-date-and-time-value { min-width: 0; text-align: left; }
+input::-webkit-datetime-edit { min-width: 0; padding: 0; }
+.profile-feature-grid { grid-template-columns: minmax(0, 1fr); }
+.app-header #account-area { display: flex; flex-direction: row; align-items: center; gap: .5rem; }
+.app-header #account-area.is-hidden { display: none; }
+.profile-feature-grid .button { font-size: .9rem; }
+.gender-icon { display: block; width: 1.15em; height: 1.15em; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.person-symbol, .gender-badge b, .gender-count b { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+#install-guide-dialog .modal-shell { position: relative; padding-top: 3.5rem; }
+#install-guide-dialog .modal-close { position: absolute; right: 1rem; top: 1rem; }
+@media (max-width: 480px) {
+  #match-form .form-section.two-columns:has(input[type="datetime-local"]),
+  #time-vote-dialog .two-columns { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -51,11 +51,11 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends Activity {
     public static final String EXTRA_OPEN_URL = "dazi_open_url";
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=5";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=6";
     private static final int PICK_PHOTO = 10;
     private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
-    private LinearLayout loadingPanel;
+    private FrameLayout loadingPanel;
     private TextView loadingDetail;
     private LinearLayout errorPanel;
     private final Handler connectionHandler = new Handler(Looper.getMainLooper());
@@ -65,6 +65,13 @@ public class MainActivity extends Activity {
         }
     };
     private ValueCallback<Uri[]> fileCallback;
+    private final Runnable connectionTimeout = () -> {
+        if (loadingPanel.getVisibility() == View.VISIBLE) {
+            pageFailed = true;
+            webView.stopLoading();
+            showConnectionError();
+        }
+    };
     private Uri cameraUri;
     private boolean pageFailed;
     private String pendingPushToken;
@@ -91,31 +98,42 @@ public class MainActivity extends Activity {
         webView = new WebView(this);
         root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
 
-        loadingPanel = new LinearLayout(this);
-        loadingPanel.setOrientation(LinearLayout.VERTICAL);
-        loadingPanel.setGravity(Gravity.CENTER);
-        loadingPanel.setPadding(dp(32), dp(40), dp(32), dp(40));
-        loadingPanel.setBackgroundColor(Color.rgb(20, 17, 27));
-        loadingPanel.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        ProgressBar progress = new ProgressBar(this);
-        LinearLayout.LayoutParams progressLayout = new LinearLayout.LayoutParams(dp(48), dp(48));
-        progressLayout.bottomMargin = dp(24);
-        loadingPanel.addView(progress, progressLayout);
-        TextView loadingTitle = new TextView(this);
-        loadingTitle.setText("正在连接理工搭子局");
-        loadingTitle.setTextColor(Color.WHITE);
-        loadingTitle.setTextSize(20);
-        loadingTitle.setGravity(Gravity.CENTER);
-        loadingTitle.setTypeface(loadingTitle.getTypeface(), android.graphics.Typeface.BOLD);
-        loadingPanel.addView(loadingTitle);
+        loadingPanel = new FrameLayout(this);
+        loadingPanel.setBackgroundColor(Color.rgb(249, 245, 255));
+        WebView artwork = new WebView(this);
+        artwork.setBackgroundColor(Color.TRANSPARENT);
+        artwork.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        artwork.setFocusable(false);
+        artwork.setOnTouchListener((v, event) -> true);
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(
+                getAssets().open("launch-art.html"), StandardCharsets.UTF_8))) {
+            StringBuilder html = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) html.append(line).append('\n');
+            boolean night = (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                    == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+            artwork.loadDataWithBaseURL("file:///android_asset/", html.toString().replace(
+                    "@media(prefers-color-scheme:dark)", night ? "@media all" : "@media not all"),
+                    "text/html", "UTF-8", null);
+        } catch (java.io.IOException ignored) { /* Loading text remains available. */ }
+        loadingPanel.addView(artwork, new FrameLayout.LayoutParams(-1, -1));
         loadingDetail = new TextView(this);
-        loadingDetail.setText("正在加载最新内容，请稍候…");
-        loadingDetail.setTextColor(Color.rgb(192, 181, 211));
-        loadingDetail.setTextSize(15);
+        loadingDetail.setText("正在加载…");
+        loadingDetail.setTextColor(Color.rgb(84, 42, 138));
+        loadingDetail.setBackgroundColor(Color.argb(242, 250, 247, 255));
+        loadingDetail.setPadding(dp(18), dp(12), dp(18), dp(12));
+        loadingDetail.setTextSize(14);
         loadingDetail.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams detailLayout = new LinearLayout.LayoutParams(-2, -2);
-        detailLayout.topMargin = dp(10);
+        loadingDetail.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        FrameLayout.LayoutParams detailLayout = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        detailLayout.bottomMargin = dp(20);
         loadingPanel.addView(loadingDetail, detailLayout);
+        if ((getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+            loadingPanel.setBackgroundColor(Color.rgb(23, 18, 31));
+            loadingDetail.setBackgroundColor(Color.rgb(43, 32, 56));
+            loadingDetail.setTextColor(Color.rgb(234, 217, 255));
+        }
         root.addView(loadingPanel, new FrameLayout.LayoutParams(-1, -1));
 
         errorPanel = new LinearLayout(this);
@@ -147,7 +165,7 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/5");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/6");
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
         webView.addJavascriptInterface(new PushBridge(), "LigongPush");
 
@@ -174,6 +192,14 @@ public class MainActivity extends Activity {
 
             @Override public void onPageFinished(WebView view, String url) {
                 if (!pageFailed) hideConnectionPanels();
+            }
+
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceResponse response) {
+                if (request.isForMainFrame()) {
+                    pageFailed = true;
+                    showConnectionError();
+                }
             }
         });
 
@@ -243,7 +269,7 @@ public class MainActivity extends Activity {
         String relative = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_URL);
         if (relative != null && relative.startsWith("/") && !relative.startsWith("//")) {
             String separator = relative.contains("?") ? "&" : "?";
-            return "https://" + HOST + relative + separator + "source=android-native&version=5";
+            return "https://" + HOST + relative + separator + "source=android-native&version=6";
         }
         return START_URL;
     }
@@ -309,6 +335,8 @@ public class MainActivity extends Activity {
     }
 
     private void showLoading() {
+        connectionHandler.removeCallbacks(connectionTimeout);
+        connectionHandler.postDelayed(connectionTimeout, 20000);
         connectionHandler.removeCallbacks(slowConnectionNotice);
         loadingDetail.setText("正在加载最新内容，请稍候…");
         errorPanel.setVisibility(View.GONE);
@@ -317,12 +345,14 @@ public class MainActivity extends Activity {
     }
 
     private void hideConnectionPanels() {
+        connectionHandler.removeCallbacks(connectionTimeout);
         connectionHandler.removeCallbacks(slowConnectionNotice);
         loadingPanel.setVisibility(View.GONE);
         errorPanel.setVisibility(View.GONE);
     }
 
     private void showConnectionError() {
+        connectionHandler.removeCallbacks(connectionTimeout);
         connectionHandler.removeCallbacks(slowConnectionNotice);
         loadingPanel.setVisibility(View.GONE);
         errorPanel.setVisibility(View.VISIBLE);

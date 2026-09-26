@@ -862,13 +862,19 @@ function genderInfo(gender) {
 
 function genderBadge(gender) {
   const info = genderInfo(gender);
-  return `<span class="gender-badge ${info.className}"><b aria-hidden="true">${info.symbol}</b>${info.label}</span>`;
+  return `<span class="gender-badge ${info.className}"><b aria-hidden="true">${genderIcon(gender)}</b>${info.label}</span>`;
+}
+
+function genderIcon(gender) {
+  const path = gender === "male" ? '<circle cx="9" cy="15" r="5"/><path d="m13 11 7-7m-6 0h6v6"/>'
+    : gender === "female" ? '<circle cx="12" cy="8" r="5"/><path d="M12 13v9m-4-4h8"/>' : '<path d="M5 12h14"/>';
+  return `<svg class="gender-icon" viewBox="0 0 24 24" aria-hidden="true">${path}</svg>`;
 }
 
 function personProfileTag(user, compact = false) {
   const info = genderInfo(user.gender);
   return `<button class="person-profile-tag ${info.className} ${compact ? "is-compact" : ""}" type="button" data-user-profile="${escapeHtml(user.id)}" aria-label="查看${escapeHtml(user.display_name)}的个人主页">
-    <span class="person-symbol" aria-hidden="true">${info.symbol}</span>
+    <span class="person-symbol" aria-hidden="true">${genderIcon(user.gender)}</span>
     <span><strong>${escapeHtml(user.display_name)}</strong><small>${escapeHtml(info.label)} · 查看主页</small></span>
   </button>`;
 }
@@ -876,8 +882,8 @@ function personProfileTag(user, compact = false) {
 function activityGenderSummary(activity, interactive = true) {
   const counts = activity.gender_counts || {};
   const undisclosedCount = Number(counts.undisclosed || 0);
-  const content = `<span class="gender-count gender-male"><b aria-hidden="true">♂</b> 男 ${Number(counts.male || 0)}</span>
-    <span class="gender-count gender-female"><b aria-hidden="true">♀</b> 女 ${Number(counts.female || 0)}</span>
+  const content = `<span class="gender-count gender-male"><b aria-hidden="true">${genderIcon("male")}</b> 男 ${Number(counts.male || 0)}</span>
+    <span class="gender-count gender-female"><b aria-hidden="true">${genderIcon("female")}</b> 女 ${Number(counts.female || 0)}</span>
     ${undisclosedCount ? `<span class="gender-count gender-undisclosed"><b aria-hidden="true">—</b> 不公开 ${undisclosedCount}</span>` : ""}
     ${interactive ? "<small>查看成员 →</small>" : ""}`;
   if (!interactive) return content;
@@ -1573,6 +1579,11 @@ function refreshInstallHint() {
   link.href = "/downloads/ligong-dazi-native.apk";
   link.textContent = "下载安卓 APK";
   document.querySelector("#profile-ios-install").classList.toggle("is-hidden", !isIos() || installed);
+  document.querySelector("#install-guide-button").classList.toggle("is-hidden", installed || (!androidBrowser && !isIos()));
+  document.querySelector("#install-guide-download").classList.toggle("is-hidden", !androidBrowser);
+  document.querySelector("#install-guide-copy").textContent = androidBrowser
+    ? "要接收应用系统通知，必须先下载并安装 APK，再从桌面打开搭子局，在「活动提醒」中开启并允许系统通知。仅下载文件不会开启通知，站内消息不受影响。通知送达也受系统后台与网络设置影响。"
+    : "只有完成以下操作并允许通知后，才能接收系统提醒：用 Safari 打开本站 → 点击「分享」→「添加到主屏幕」→ 从桌面图标打开 → 在「活动提醒」中开启并允许通知。站内消息不受影响；系统通知还需设备与系统支持。";
 }
 function nativePushStatus() {
   if (!IS_NATIVE_ANDROID || !window.LigongPush) return null;
@@ -2661,6 +2672,7 @@ function bindEvents() {
 async function initialize() {
   populateCollegeSelects();
   bindEvents();
+  document.querySelector("#install-guide-button").addEventListener("click", () => document.querySelector("#install-guide-dialog").showModal());
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   }
@@ -2687,9 +2699,10 @@ async function initialize() {
     const initialTab = launch.get("tab");
     if (initialTab && ["match", "square", "invitations", "activities", "profile"].includes(initialTab)) switchTab(initialTab);
     else if (!["南京", "江阴"].includes(state.user.campus) || !state.user.student_id) switchTab("profile");
-  } catch {
-    logout(false);
+  } catch (error) {
+    if (error.status === 401) logout(false);
+    else throw error;
   }
 }
 
-initialize();
+initialize().then(() => window.daziLaunch?.ready()).catch(() => window.daziLaunch?.fail());

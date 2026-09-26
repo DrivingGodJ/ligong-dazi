@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>欢迎来到理工搭子局</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{position:fixed;inset:0;contain:paint}
+body{--bg:#faf7ff;--ink:#793dce;--soft:#e5d4fb;--wave:#cfa8f4;background:var(--bg);font-family:system-ui,sans-serif;color:var(--ink);display:grid;place-items:center}
+body:before,body:after{content:"";position:absolute;width:65vmin;height:65vmin;border-radius:50%;background:var(--soft);z-index:0}
+body:before{left:-30vmin;top:-26vmin}body:after{right:-35vmin;top:-32vmin}
+.composition{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;width:100%;height:100%;padding: max(24px,env(safe-area-inset-top)) 20px max(90px,env(safe-area-inset-bottom));gap:clamp(4px,2vh,24px)}
+h1{font-size:clamp(30px,8vmin,64px);line-height:1.1;margin:0;font-weight:850;letter-spacing:-.03em}
+.flower{display:block;width:min(90vw,460px);height:min(58vh,560px);min-height:0;overflow:visible}
+.waves{position:absolute;inset:auto 0 0;width:100%;height:20%;color:var(--wave)}
+.line{position:absolute;inset:0;width:100%;height:100%;stroke:#bd92f0;fill:none;stroke-width:3;opacity:.65}
+@media(orientation:landscape){.composition{flex-direction:row;gap:4vw;padding:18px 5vw 70px}.flower{width:min(48vw,480px);height:75vh}h1{font-size:clamp(28px,8vh,64px)}}
+@media(prefers-color-scheme:dark){body{--bg:#17121f;--ink:#d3b0ff;--soft:#2d203e;--wave:#50336b}.line{stroke:#79549f}.flower{filter:brightness(.92)}}
+</style></head><body>
+<svg class="line" viewBox="0 0 590 1050" preserveAspectRatio="none" aria-hidden="true"><path d="M-20 290Q130 190 72 180T265 108M500 470Q610 500 620 660"/><circle cx="280" cy="80" r="12" fill="#c7a0ef" stroke="none"/><circle cx="480" cy="180" r="16" fill="#ac7de5" stroke="none"/></svg>
+<div class="composition"><h1>Welcome</h1>
+<svg class="flower" viewBox="0 0 430 540" role="img" aria-label="向你打招呼的紫色小花">
+<defs><linearGradient id="violet" x2=".8" y2="1"><stop stop-color="#a876e9"/><stop offset="1" stop-color="#8750cf"/></linearGradient><linearGradient id="lilac" x2="1" y2="1"><stop stop-color="#dec3ff"/><stop offset="1" stop-color="#ba8eeb"/></linearGradient><linearGradient id="leaf" x2="1" y2="1"><stop stop-color="#8bb65b"/><stop offset="1" stop-color="#587b3d"/></linearGradient></defs>
+<g stroke-linecap="round"><path d="M216 518Q175 358 181 235" stroke="#719849" stroke-width="17" fill="none"/><path d="M215 516C103 511 49 425 87 407c48-27 117 42 128 109Z" fill="url(#leaf)"/><path d="M219 520c-12-79 59-167 116-157 47 11-2 113-116 157Z" fill="url(#leaf)"/><path d="M214 510q-37-60-95-77m104 71q40-75 90-108" stroke="#668d45" stroke-width="8" fill="none"/>
+<path d="M202 442q-54-83-99-85" stroke="#739b4f" stroke-width="9" fill="none"/><ellipse cx="82" cy="344" rx="39" ry="26" transform="rotate(35 82 344)" fill="url(#violet)"/><path d="M104 367q-48-11-34-28 13-2 24 9-5-34 10-30 19 20 16 45Z" fill="#7aa44f"/>
+<path d="M184 188C83 199 34 151 42 92 49 33 127 17 170 55c36 33 48 89 14 133Z" fill="url(#violet)"/>
+<path d="M193 190c-7-80 70-141 133-117 61 24 61 89 12 121-42 28-99 32-145-4Z" fill="url(#lilac)"/>
+<path d="M181 197c-54-36-130-15-153 32-26 53 15 94 66 89 58-6 91-57 87-121Z" fill="url(#lilac)"/>
+<path d="M190 205c66-25 134 10 147 66 14 58-40 90-91 69-55-22-70-81-56-135Z" fill="url(#violet)"/>
+<g fill="#ffeab0"><ellipse cx="179" cy="183" rx="15" ry="31" transform="rotate(-30 179 183)"/><ellipse cx="199" cy="199" rx="32" ry="16" transform="rotate(-30 199 199)"/><ellipse cx="186" cy="222" rx="16" ry="30" transform="rotate(-25 186 222)"/><ellipse cx="161" cy="210" rx="27" ry="15" transform="rotate(-25 161 210)"/></g><circle cx="181" cy="204" r="15" fill="#ffd05d"/>
+<g fill="#291846"><ellipse cx="240" cy="278" rx="7" ry="11" transform="rotate(-10 240 278)"/><ellipse cx="296" cy="261" rx="7" ry="11" transform="rotate(-10 296 261)"/><path d="M260 283q11 13 20-4" stroke="#291846" stroke-width="6" fill="none"/></g>
+<g transform="translate(340 219) rotate(-15)"><path d="M-6 5q0-26 35-26t33 27q0 29-38 29L5 49l5-20Q-6 25-6 5" fill="#fff"/><text x="28" y="17" text-anchor="middle" font-family="sans-serif" font-size="27" font-weight="bold" fill="#ad7bdf">Hi</text></g>
+<path d="m294 28 8-17m9 29 18-11M363 337l16-23m-7 45 24-9" stroke="#c9a0f5" stroke-width="10" fill="none"/><circle cx="35" cy="22" r="11" fill="#d6b8fa"/>
+</g></svg></div>
+<svg class="waves" viewBox="0 0 1000 200" preserveAspectRatio="none" aria-hidden="true"><path d="M0 55C210 25 350 160 500 160S820 20 1000 30V200H0Z" fill="currentColor"/><path d="M200 200Q700 20 1000 180V200Z" fill="#af7fe0" opacity=".5"/></svg>
+</body></html>
