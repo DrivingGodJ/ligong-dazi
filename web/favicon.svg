@@ -3,7 +3,6 @@
     <linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7040D5"/><stop offset="1" stop-color="#A668EC"/></linearGradient>
     <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#DFC0FF"/><stop offset="1" stop-color="#A55FE8"/></linearGradient>
   </defs>
-  <rect width="64" height="64" rx="18" fill="#FCFAFF"/>
   <path d="M33 31C24 35 12 29 12 19c0-9 8-14 16-10 9 4 12 16 5 22Z" fill="url(#a)"/>
   <path d="M33 32c0-10 8-19 17-18 9 2 11 12 5 19-6 7-16 7-22-1Z" fill="url(#b)"/>
   <path d="M31 33c-9-4-19 1-20 10-1 9 9 14 17 9 8-5 10-14 3-19Z" fill="url(#b)"/>
