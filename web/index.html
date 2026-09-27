@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-student-card-limit="daily">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -24,10 +24,10 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=2" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-transparent.png?v=1" />
-    <link rel="stylesheet" href="/static/styles.css?v=23" />
+    <link rel="stylesheet" href="/static/styles.css?v=24" />
     <link rel="stylesheet" href="/static/visual-language.css?v=2" />
-    <link rel="stylesheet" href="/static/reference-ui.css?v=8" />
-    <script src="/static/app.js?v=30" defer></script>
+    <link rel="stylesheet" href="/static/reference-ui.css?v=11" />
+    <script src="/static/app.js?v=34" defer></script>
   </head>
   <body class="is-launching">
     <div id="launch-screen" aria-label="正在打开理工搭子局">
@@ -121,7 +121,7 @@
             <form id="login-form" class="form-stack">
               <label>
                 学号或旧账号邮箱
-                <input name="account" type="text" inputmode="text" autocomplete="username" maxlength="320" required />
+                <input name="account" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" maxlength="320" required />
                 <span class="field-help">旧账号绑定学号前可用邮箱登录；绑定后请改用学号。</span>
               </label>
               <label>
@@ -129,6 +129,7 @@
                 <input name="password" type="password" autocomplete="current-password" minlength="8" required />
               </label>
               <button class="button button-primary button-wide" type="submit">登录并开始组局</button>
+              <button id="forgot-password-button" class="button button-quiet button-wide" type="button">忘记密码？用学生卡找回</button>
             </form>
 
             <div class="demo-login">
@@ -176,12 +177,16 @@
                 </label>
                 <label>
                   学号
-                  <input name="student_id" type="text" inputmode="numeric" autocomplete="username" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" placeholder="请输入你的学号" required />
+                  <input name="student_id" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" placeholder="请输入你的学号" required />
                 </label>
                 <label>
                   密码
-                  <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+                  <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
                   <span class="field-help">至少 8 位，别用容易猜到的组合</span>
+                </label>
+                <label>
+                  再次输入密码
+                  <input name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="128" required />
                 </label>
                 <button id="register-next" class="button button-primary button-wide" type="button">下一步：做个小画像</button>
               </div>
@@ -537,13 +542,12 @@
               </div>
               <button id="generate-summary-button" class="button button-accent" type="button">✦ 让 AI 总结我</button>
             </section>
-            <section class="notification-settings" aria-labelledby="notification-settings-heading">
+            <section id="push-introduction" class="notification-settings is-hidden" aria-labelledby="notification-settings-heading">
               <h2 id="notification-settings-heading"><span class="section-title-icon" aria-hidden="true">●</span>活动提醒</h2>
               <p id="push-status">邀请和活动消息会保存在站内；手机弹窗需另外授权。</p>
               <button id="enable-push-button" class="button button-primary" type="button">打开手机通知</button>
               <a id="profile-apk-link" class="button button-quiet is-hidden" href="/downloads/ligong-dazi.apk">下载／更新安卓应用</a>
               <p id="profile-ios-install" class="install-guide is-hidden">只有用 Safari「分享 → 添加到主屏幕」，从桌面打开并允许通知后，才能接收系统提醒。站内消息不受影响。</p>
-              <a id="profile-apk-update" class="button button-quiet is-hidden" href="/downloads/ligong-dazi-native.apk">更新安卓应用</a>
             </section>
           </div>
 
@@ -555,7 +559,7 @@
             </div>
             <form id="claim-student-id-form" class="claim-student-id-form">
               <label>我的学号
-                <input name="student_id" type="text" inputmode="numeric" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" required />
+                <input name="student_id" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" required />
               </label>
               <button class="button button-primary" type="submit">绑定学号</button>
               <p id="claim-student-id-error" class="form-error is-hidden" role="alert"></p>
@@ -612,12 +616,18 @@
               自我介绍
               <textarea name="bio" rows="4" maxlength="500" placeholder="简单说说你的活动习惯"></textarea>
             </label>
+            <label id="push-preference" class="invitation-preference invitation-preference-wide push-preference is-hidden">
+              <span class="invitation-setting-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M14.5 21a3 3 0 0 1-5 0" /></svg></span>
+              <span class="invitation-preference-copy"><strong><span id="push-preference-label">本设备活动通知</span><span id="push-preference-value">已关闭</span></strong><small id="push-preference-description" aria-live="polite">关闭仅停止本设备推送，邀请和活动消息仍会保存在站内。</small></span>
+              <span class="preference-switch"><input id="push-notifications-toggle" type="checkbox" role="switch" aria-labelledby="push-preference-label" aria-describedby="push-preference-description" /><span aria-hidden="true"></span></span>
+            </label>
             <div class="form-actions">
               <p id="profile-status" class="save-status" aria-live="polite">修改后会自动保存</p>
               <button id="profile-retry" class="button button-quiet is-hidden" type="button">重试保存</button>
             </div>
           </form>
           <div class="profile-logout">
+            <a id="profile-apk-update" class="button button-quiet is-hidden" href="/downloads/ligong-dazi-native.apk">更新安卓应用</a>
             <button id="logout-button" class="button button-quiet" type="button">退出登录</button>
           </div>
         </section>
@@ -648,21 +658,46 @@
       <button class="nav-button" type="button" data-tab="profile"><svg class="nav-icon nav-face-icon" viewBox="0 0 40 40" aria-hidden="true"><circle cx="19" cy="21" r="15"/><circle class="nav-face" cx="14" cy="20" r="1.4"/><circle class="nav-face" cx="24" cy="20" r="1.4"/><path class="nav-smile" d="M13 25c4 4 8 4 12 0"/><path class="nav-heart" d="M30 7c3-5 10-2 8 3-1 3-5 6-8 8-3-2-7-5-8-8-2-5 5-8 8-3Z"/></svg><span class="nav-label">我的画像</span></button>
     </nav>
 
+    <dialog id="password-reset-dialog" class="modal-card" aria-labelledby="password-reset-title">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="password-reset-dialog" aria-label="关闭找回密码">×</button>
+        <p class="eyebrow">账号安全</p>
+        <h2 id="password-reset-title">用学生卡找回密码</h2>
+        <form id="password-reset-card-form" class="form-stack">
+          <p class="modal-copy" data-student-card-unlimited-copy="本地测试模式：学生卡上传不限次数，核验失败可以立即重试。核验通过后才能设置新密码。">先核验学生卡人像面，通过后由你设置新密码。每人每天仅可上传一次，与学号申诉共用次数；材料未通过请第二天重试，北京时间凌晨重置。模型或服务器错误不扣次数，可以重试。</p>
+          <label>学号<input name="student_id" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" required /></label>
+          <label>学生卡人像面<input name="student_card" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required />
+            <span class="field-help">请拍清学校名称、本人照片和学号。照片会先强力压缩再上传，请勿上传身份证或银行卡。</span>
+          </label>
+          <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span>我同意将照片发送给后台配置的 AI 服务进行身份核验。</span></label>
+          <button class="button button-primary button-wide" type="submit">核验学生卡</button>
+        </form>
+        <form id="password-reset-password-form" class="form-stack is-hidden">
+          <p class="modal-copy">核验已通过。请在 15 分钟内设置新密码，完成前不要关闭或刷新页面；修改后其他设备需要重新登录。</p>
+          <label>新密码<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /><span class="field-help">8–128 位，不能与原密码相同。</span></label>
+          <label>再次输入新密码<input name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+          <button class="button button-primary button-wide" type="submit">保存新密码并返回登录</button>
+        </form>
+        <p id="password-reset-status" class="form-error is-hidden" role="status" aria-live="polite"></p>
+      </div>
+    </dialog>
+
     <dialog id="student-appeal-dialog" class="modal-card">
       <div class="modal-shell">
         <button class="modal-close" type="button" data-close-dialog="student-appeal-dialog" aria-label="关闭申诉">×</button>
         <p class="eyebrow">学号申诉</p>
         <h2>这个学号已经被使用？</h2>
-        <p class="modal-copy">如果这确实是你的学号，请上传学生卡人像面。审核 Agent 通过后，原账号会冻结 24 小时等待对方举证；双方材料都可信时转人工复核。</p>
+        <p class="modal-copy">如果这确实是你的学号，请上传学生卡人像面。AI 通过后，原账号有 24 小时上传照片；只有一直未上传才会自动注销并交接学号。双方材料都可信时转人工复核。</p>
+        <p class="modal-copy" data-student-card-unlimited-copy="本地测试模式：双方学生卡上传不限次数，核验失败可以立即重试。">双方每人每天最多上传一次，与找回密码共用次数。材料未通过可以第二天重试，北京时间凌晨重置。模型或服务器错误不扣次数，可以重试。</p>
         <form id="student-appeal-form" class="form-stack">
           <label>申诉学号<input name="student_id" type="text" readonly required /></label>
           <label>联系方式（必填）<input name="contact" type="text" maxlength="160" minlength="5" placeholder="微信、QQ、手机号或邮箱" autocomplete="off" required /></label>
           <label>学生卡人像面（必填）
             <input name="student_card" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required />
-            <span class="field-help">请拍清学校名称、本人照片和学号，单张不超过 5 MB。不要上传银行卡或身份证。</span>
+            <span class="field-help">请拍清学校名称、本人照片和学号。照片会先强力压缩再上传，不要上传银行卡或身份证。</span>
           </label>
           <label>补充说明（选填）<textarea name="description" rows="3" maxlength="500" placeholder="例如：什么时候发现学号被占用"></textarea></label>
-          <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span>我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审；无法可靠判断时会转人工。</span></label>
+          <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span data-student-card-unlimited-copy="我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审；无法可靠判断时不会自动交接。本地测试可以立即重试。">我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审；无法可靠判断时不会自动交接，可次日重试。</span></label>
           <p id="student-appeal-status" class="form-error is-hidden" role="status" aria-live="polite"></p>
           <button class="button button-primary" type="submit">提交身份申诉</button>
         </form>
@@ -686,7 +721,7 @@
         <form id="identity-card-form" class="form-stack">
           <label>上传你的学生卡人像面
             <input name="student_card" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" required />
-            <span class="field-help">请确保学校名称、本人照片和学号清晰可见，单张不超过 5 MB。</span>
+            <span class="field-help" data-student-card-unlimited-copy="请确保学校名称、本人照片和学号清晰可见，照片会先压缩。本地测试不限次数，可以立即重试；已上传不会因识别失败自动注销。">请确保学校名称、本人照片和学号清晰可见，照片会先压缩。每天仅可上传一次，材料未通过请第二天重试；模型或服务器错误不扣次数。已上传不会因识别失败自动注销。</span>
           </label>
           <label class="consent-choice"><input name="ai_consent" type="checkbox" required /><span>我同意将这张学生卡照片发送给后台当前配置的 AI 服务进行身份初审。</span></label>
           <button class="button button-primary" type="submit">提交学生卡核验</button>

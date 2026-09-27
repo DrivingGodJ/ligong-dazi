@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     getui_master_secret: SecretStr | None = None
     activity_photo_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     identity_card_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
+    local_unlimited_student_card_uploads: bool = False
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> Settings:
@@ -76,6 +77,11 @@ class Settings(BaseSettings):
         ):
             raise ValueError("production 环境必须配置至少 20 位的 DAZI_ADMIN_PASSWORD")
         return self
+
+    @property
+    def student_card_uploads_unlimited(self) -> bool:
+        # A copied local config must never disable production identity safeguards.
+        return self.environment == "development" and self.local_unlimited_student_card_uploads
 
     @property
     def use_llm(self) -> bool:
@@ -177,9 +183,17 @@ def verify_password(password: str, encoded: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
-def create_access_token(user_id: str, settings: Settings) -> tuple[str, datetime]:
+def create_access_token(
+    user_id: str, settings: Settings, token_version: int = 0
+) -> tuple[str, datetime]:
     expires_at = datetime.now(UTC) + timedelta(minutes=settings.access_token_minutes)
-    payload = {"sub": user_id, "exp": expires_at, "iat": datetime.now(UTC), "typ": "access"}
+    payload = {
+        "sub": user_id,
+        "exp": expires_at,
+        "iat": datetime.now(UTC),
+        "typ": "access",
+        "ver": token_version,
+    }
     token = jwt.encode(
         payload,
         settings.jwt_secret.get_secret_value(),
@@ -188,7 +202,7 @@ def create_access_token(user_id: str, settings: Settings) -> tuple[str, datetime
     return token, expires_at
 
 
-def decode_access_token(token: str, settings: Settings) -> str:
+def decode_access_token_payload(token: str, settings: Settings) -> dict:
     payload = jwt.decode(
         token,
         settings.jwt_secret.get_secret_value(),
@@ -197,4 +211,8 @@ def decode_access_token(token: str, settings: Settings) -> str:
     )
     if payload.get("typ") != "access":
         raise jwt.InvalidTokenError("token 类型不正确")
-    return str(payload["sub"])
+    return payload
+
+
+def decode_access_token(token: str, settings: Settings) -> str:
+    return str(decode_access_token_payload(token, settings)["sub"])

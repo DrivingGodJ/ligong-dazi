@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core import DatabaseRuntime, Settings
 from app.identity_appeals import (
     ACTIVE_APPEAL_STATUSES,
+    can_resolve_identity_appeal,
     redact_claimant_registration,
     remove_appeal_files,
     transfer_student_id,
@@ -236,6 +237,11 @@ async def mark_student_id_appeal_handled(
     if appeal is None:
         raise HTTPException(status_code=404, detail="申诉记录不存在")
     if appeal.status in ACTIVE_APPEAL_STATUSES:
+        if not can_resolve_identity_appeal(appeal.status, appeal.claimant_agent_review):
+            raise HTTPException(
+                status_code=403,
+                detail="申诉人初审未通过或尚未完成，这条申诉仅可查看，不能处理或变更账号归属",
+            )
         owner = await session.get(User, appeal.owner_id) if appeal.owner_id else None
         if owner is not None:
             owner.identity_frozen = False
@@ -290,6 +296,11 @@ async def resolve_student_id_appeal(
         raise HTTPException(status_code=404, detail="申诉记录不存在")
     if appeal.status not in ACTIVE_APPEAL_STATUSES:
         return StudentIdAppealPublic.model_validate(appeal)
+    if not can_resolve_identity_appeal(appeal.status, appeal.claimant_agent_review):
+        raise HTTPException(
+            status_code=403,
+            detail="申诉人初审未通过或尚未完成，这条申诉仅可查看，不能处理或变更账号归属",
+        )
     owner = await session.get(User, appeal.owner_id) if appeal.owner_id else None
     if payload.decision == "keep_owner":
         if owner is not None:

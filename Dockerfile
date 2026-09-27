@@ -4,6 +4,7 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DAZI_ENVIRONMENT=production \
+    DAZI_LOCAL_UNLIMITED_STUDENT_CARD_UPLOADS=false \
     DAZI_AI_PROVIDER=deterministic \
     DAZI_CORS_ORIGINS="[]" \
     DAZI_DATABASE_URL="sqlite+aiosqlite:////app/data/ligong_dazi.db" \

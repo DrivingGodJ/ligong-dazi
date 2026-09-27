@@ -73,6 +73,7 @@ class User(Base, TimestampMixin):
         String(24), unique=True, index=True, nullable=True
     )
     password_hash: Mapped[str] = mapped_column(String(255))
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
     display_name: Mapped[str] = mapped_column(String(80))
     university: Mapped[str] = mapped_column(String(120), default="南京理工大学", index=True)
     campus: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -123,6 +124,29 @@ class StudentIdAppeal(Base):
     resolution_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class StudentCardUploadAttempt(Base):
+    __tablename__ = "student_card_upload_attempts"
+    __table_args__ = (UniqueConstraint("subject_key", "upload_day", name="uq_card_daily_upload"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    subject_key: Mapped[str] = mapped_column(String(80), index=True)
+    upload_day: Mapped[str] = mapped_column(String(10))
+    purpose: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
+class PasswordResetGrant(Base):
+    __tablename__ = "password_reset_grants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash_snapshot: Mapped[str] = mapped_column(String(255))
+    student_id: Mapped[str] = mapped_column(String(24))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class UserBlock(Base):

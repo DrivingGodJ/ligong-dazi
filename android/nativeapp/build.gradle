@@ -5,14 +5,17 @@ plugins {
 android {
     namespace 'app.zeabur.ligongdazi.nativeapp'
     compileSdkVersion 35
+    buildFeatures {
+        buildConfig true
+    }
 
     defaultConfig {
         // Separate from the existing TWA so testers do not lose its Web Push support.
         applicationId 'app.zeabur.ligongdazi.nativeapp'
         minSdkVersion 23
         targetSdkVersion 35
-        versionCode 6
-        versionName "1.5-beta"
+        versionCode 7
+        versionName "1.6-beta"
         manifestPlaceholders = [GETUI_APPID: "S4Lc1ylHbS8bCbKAAxkaD3"]
     }
 

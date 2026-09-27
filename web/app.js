@@ -2,6 +2,12 @@ const API_ROOT = "/api/v1";
 const TOKEN_KEY = "ligong_dazi_access_token";
 const IS_NATIVE_ANDROID = /LigongDaziNative\//.test(navigator.userAgent);
 
+if (document.documentElement.dataset.studentCardLimit === "unlimited") {
+  document.querySelectorAll("[data-student-card-unlimited-copy]").forEach((element) => {
+    element.textContent = element.dataset.studentCardUnlimitedCopy;
+  });
+}
+
 const state = {
   token: localStorage.getItem(TOKEN_KEY),
   user: null,
@@ -40,6 +46,13 @@ const state = {
   profileSaveInFlight: false,
   profileSavedSnapshot: "",
   profileEditRevision: 0,
+  passwordResetToken: null,
+  passwordResetStudentId: "",
+  passwordResetRevision: 0,
+  pushEnabled: false,
+  pushBusy: false,
+  pushStatusRevision: 0,
+  pushControlsSeen: new Set(),
 };
 
 const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
@@ -91,6 +104,10 @@ const elements = {
   claimAppealButton: document.querySelector("#claim-appeal-button"),
   loginForm: document.querySelector("#login-form"),
   registerForm: document.querySelector("#register-form"),
+  passwordResetDialog: document.querySelector("#password-reset-dialog"),
+  passwordResetCardForm: document.querySelector("#password-reset-card-form"),
+  passwordResetPasswordForm: document.querySelector("#password-reset-password-form"),
+  passwordResetStatus: document.querySelector("#password-reset-status"),
   matchForm: document.querySelector("#match-form"),
   matchSubmit: document.querySelector("#match-submit"),
   resultPanel: document.querySelector(".result-panel"),
@@ -234,7 +251,7 @@ function setButtonLoading(button, loading, loadingText) {
     button.setAttribute("aria-busy", "true");
   } else {
     button.textContent = button.dataset.originalText || button.textContent;
-    button.disabled = false;
+    button.disabled = Boolean(button.dataset.dailyBlocked);
     button.removeAttribute("aria-busy");
   }
 }
@@ -250,6 +267,7 @@ function showToast(message) {
 
 function showInlineError(element, message) {
   element.textContent = message;
+  element.classList.remove("is-success", "is-pending");
   element.classList.remove("is-hidden");
 }
 
@@ -280,6 +298,7 @@ async function loadAgentMode() {
 
 function hideInlineError(element) {
   element.textContent = "";
+  element.classList.remove("is-success", "is-pending");
   element.classList.add("is-hidden");
 }
 
@@ -314,7 +333,8 @@ function showRegisterStep(step) {
 }
 
 function continueRegistration() {
-  const fields = ["display_name", "student_id", "password"].map(
+  if (!validatePasswordConfirmation(elements.registerForm)) return;
+  const fields = ["display_name", "student_id", "password", "password_confirmation"].map(
     (name) => elements.registerForm.elements[name],
   );
   const invalid = fields.find((field) => !field.checkValidity());
@@ -375,6 +395,8 @@ async function logout(showMessage = true) {
   window.clearInterval(state.notificationTimer);
   state.notificationTimer = null;
   state.notificationLoadRevision += 1;
+  state.pushStatusRevision += 1;
+  state.pushEnabled = false;
   state.profileEditRevision += 1;
   state.token = null;
   state.user = null;
@@ -432,6 +454,7 @@ function registrationPayload() {
     display_name: String(form.get("display_name") || "").trim(),
     student_id: String(form.get("student_id") || "").trim(),
     password: form.get("password"),
+    password_confirmation: form.get("password_confirmation"),
     university: "南京理工大学",
     campus: String(form.get("campus") || "").trim(),
     department: String(form.get("department") || "").trim() || null,
@@ -448,6 +471,10 @@ function registrationPayload() {
 
 async function handleRegister(event) {
   event.preventDefault();
+  if (!validatePasswordConfirmation(elements.registerForm)) {
+    showRegisterStep("account");
+    return;
+  }
   hideInlineError(elements.authError);
   elements.authAppealButton.classList.add("is-hidden");
   const button = event.submitter;
@@ -484,6 +511,9 @@ function openStudentAppeal(studentId) {
   const value = String(studentId || "").trim().toUpperCase();
   if (!value) return;
   elements.studentAppealForm.reset();
+  const button = elements.studentAppealForm.querySelector('[type="submit"]');
+  button.dataset.dailyBlocked = "";
+  setButtonLoading(button, false);
   elements.studentAppealForm.elements.student_id.value = value;
   hideInlineError(elements.studentAppealStatus);
   elements.studentAppealStatus.classList.remove("is-success");
@@ -494,7 +524,7 @@ function openStudentAppeal(studentId) {
 async function submitStudentAppeal(event) {
   event.preventDefault();
   const button = event.submitter;
-  setButtonLoading(button, true, "正在提交…");
+  setButtonLoading(button, true, "正在压缩照片…");
   hideInlineError(elements.studentAppealStatus);
   const form = new FormData(elements.studentAppealForm);
   const registration = registrationPayload();
@@ -503,16 +533,20 @@ async function submitStudentAppeal(event) {
     form.append("registration_json", JSON.stringify(registration));
   }
   try {
+    await compressStudentCardForm(form);
+    button.textContent = "正在核验学生卡…";
     const result = await api("/auth/student-id-appeals", {
       method: "POST",
       body: form,
     });
     elements.studentAppealStatus.textContent = result.message;
-    elements.studentAppealStatus.classList.add("is-success");
+    elements.studentAppealStatus.classList.toggle("is-success", result.status !== "claimant_retry");
     elements.studentAppealStatus.classList.remove("is-hidden");
+    button.dataset.dailyBlocked = result.can_upload === true ? "" : "true";
   } catch (error) {
     elements.studentAppealStatus.classList.remove("is-success");
     showInlineError(elements.studentAppealStatus, error.message);
+    if (error.code === "student_card_daily_limit") button.dataset.dailyBlocked = "true";
   } finally {
     setButtonLoading(button, false);
   }
@@ -521,14 +555,20 @@ async function submitStudentAppeal(event) {
 function renderIdentityReview(result) {
   elements.identityReviewMessage.textContent = result.message;
   elements.identityReviewDeadline.textContent = result.deadline
-    ? `请在 ${formatDate(result.deadline)} 前完成处理，逾期会自动交接学号。`
-    : "";
+    ? `请在 ${formatDate(result.deadline)} 前上传照片；只有一直未上传才会注销并交接学号。`
+    : "你已提交材料，不会因识别失败自动注销账号。";
+  if (result.next_upload_at) {
+    elements.identityReviewDeadline.textContent += ` 下次可上传：${formatDate(result.next_upload_at)}。`;
+  }
   elements.identityCardForm.classList.toggle(
-    "is-hidden", !["awaiting_owner", "owner_review"].includes(result.status),
+    "is-hidden", !["awaiting_owner", "owner_review", "owner_retry"].includes(result.status),
   );
+  const uploadButton = elements.identityCardForm.querySelector('[type="submit"]');
+  uploadButton.dataset.dailyBlocked = result.can_upload === false ? "true" : "";
+  uploadButton.disabled = result.can_upload === false;
   elements.identityContactForm.classList.toggle("is-hidden", result.status !== "manual_review");
   elements.identityRelinquishButton.classList.toggle(
-    "is-hidden", !["awaiting_owner", "owner_review", "manual_review"].includes(result.status),
+    "is-hidden", !["awaiting_owner", "owner_review", "owner_retry", "manual_review"].includes(result.status),
   );
 }
 
@@ -543,19 +583,23 @@ async function openIdentityReview() {
 async function submitOwnerIdentityCard(event) {
   event.preventDefault();
   const button = event.submitter;
-  setButtonLoading(button, true, "正在审核…");
+  setButtonLoading(button, true, "正在压缩照片…");
   hideInlineError(elements.identityReviewStatus);
   try {
+    const form = new FormData(elements.identityCardForm);
+    await compressStudentCardForm(form);
+    button.textContent = "正在核验学生卡…";
     const result = await api("/auth/identity-review/card", {
       method: "POST",
-      body: new FormData(elements.identityCardForm),
+      body: form,
     });
     renderIdentityReview(result);
     elements.identityReviewStatus.textContent = result.message;
-    elements.identityReviewStatus.classList.add("is-success");
+    elements.identityReviewStatus.classList.toggle("is-success", result.status !== "owner_retry");
     elements.identityReviewStatus.classList.remove("is-hidden");
   } catch (error) {
     showInlineError(elements.identityReviewStatus, error.message);
+    if (error.code === "student_card_daily_limit") button.dataset.dailyBlocked = "true";
   } finally {
     setButtonLoading(button, false);
   }
@@ -1587,8 +1631,56 @@ function refreshInstallHint() {
 }
 function nativePushStatus() {
   if (!IS_NATIVE_ANDROID || !window.LigongPush) return null;
-  try { return JSON.parse(window.LigongPush.status()); }
+  try {
+    const value = JSON.parse(window.LigongPush.status());
+    return typeof value?.enabled === "boolean" && typeof value?.permission === "boolean" ? value : null;
+  }
   catch { return null; }
+}
+
+function pushCapability() {
+  if (IS_NATIVE_ANDROID) {
+    const bridge = window.LigongPush;
+    return bridge && ["status", "enable", "disable"].every((key) => typeof bridge[key] === "function")
+      && nativePushStatus() ? "native" : null;
+  }
+  if (isIos() && !isInstalledApp()) return null;
+  return window.isSecureContext && "serviceWorker" in navigator
+    && "PushManager" in window && "Notification" in window ? "web" : null;
+}
+
+function hasPushControls() {
+  const userId = state.user?.id;
+  if (!userId) return false;
+  if (state.pushControlsSeen.has(userId)) return true;
+  try { return localStorage.getItem(`dazi_push_controls_${userId}`) === "seen"; }
+  catch { return false; }
+}
+
+function rememberPushControls() {
+  const userId = state.user?.id;
+  if (!userId) return;
+  state.pushControlsSeen.add(userId);
+  try { localStorage.setItem(`dazi_push_controls_${userId}`, "seen"); }
+  catch { /* The switch still works when local storage is unavailable. */ }
+}
+
+function renderPushControls(supported, enabled, message) {
+  state.pushEnabled = enabled;
+  if (enabled) rememberPushControls();
+  const showSwitch = supported && hasPushControls();
+  document.querySelector("#push-introduction").classList.toggle("is-hidden", !supported || showSwitch);
+  document.querySelector("#push-preference").classList.toggle("is-hidden", !showSwitch);
+  document.querySelector("#push-preference").setAttribute("aria-busy", String(state.pushBusy));
+  document.querySelector("#push-status").textContent = message;
+  document.querySelector("#push-preference-description").textContent = message;
+  document.querySelector("#push-preference-value").textContent = state.pushBusy ? "正在切换…" : enabled ? "已开启" : "已关闭";
+  const toggle = document.querySelector("#push-notifications-toggle");
+  toggle.checked = enabled;
+  toggle.disabled = state.pushBusy || !supported || !state.token;
+  const button = document.querySelector("#enable-push-button");
+  button.classList.toggle("is-hidden", !supported || showSwitch);
+  button.disabled = state.pushBusy;
 }
 
 function syncNativePush() {
@@ -1598,34 +1690,50 @@ function syncNativePush() {
 
 async function refreshPushStatus() {
   refreshInstallHint();
-  const status = document.querySelector("#push-status");
-  const button = document.querySelector("#enable-push-button");
-  if (IS_NATIVE_ANDROID) {
+  const revision = ++state.pushStatusRevision;
+  const token = state.token;
+  const capability = pushCapability();
+  if (!capability) {
+    renderPushControls(false, false, "");
+    return;
+  }
+  if (capability === "native") {
     const native = nativePushStatus();
-    if (native?.enabled && native?.permission) {
-      status.textContent = native.connected
+    if (native.enabled) rememberPushControls();
+    const enabled = Boolean(native.enabled && native.permission);
+    const message = enabled
+      ? native.connected
         ? "系统通知已连接；邀请、活动变动和开始前提醒会尝试送达。"
-        : "系统通知已允许，正在连接通知服务；首次连接可能需要一点时间。";
-      button.classList.add("is-hidden");
-    } else {
-      status.textContent = "打开后可在应用未显示时收到活动提醒。通知由个推协助送达，会处理本机的推送标识。";
-      button.textContent = native?.enabled ? "重新允许系统通知" : "打开系统通知";
-      button.classList.remove("is-hidden");
-    }
+        : "系统通知已允许，正在连接通知服务；首次连接可能需要一点时间。"
+      : native.enabled
+        ? "系统通知权限已关闭，请在系统设置中允许后重新开启。站内消息不受影响。"
+        : hasPushControls()
+          ? "本设备推送已关闭，邀请和活动消息仍会保存在站内。"
+          : "打开后可在应用未显示时收到活动提醒。通知由个推协助送达，会处理本机的推送标识。";
+    renderPushControls(true, enabled, message);
     return;
   }
-  if (isIos() && !isInstalledApp()) {
-    status.textContent = "添加到主屏幕后，可以开启活动通知；站内消息始终可用。";
-    button.classList.add("is-hidden");
-    return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = await registration?.pushManager?.getSubscription();
+    // Permission alone is not an active subscription. Check this account's server binding.
+    const binding = subscription && state.token
+      ? await api(`/push/subscriptions?endpoint=${encodeURIComponent(subscription.endpoint)}`)
+      : null;
+    if (revision !== state.pushStatusRevision || token !== state.token) return;
+    const enabled = Notification.permission === "granted" && binding?.subscribed === true;
+    const message = enabled
+      ? "本设备活动通知已开启；关闭仅停止本设备推送，站内消息不受影响。"
+      : Notification.permission === "denied"
+        ? "通知权限已被关闭，请先在系统或浏览器设置中允许通知，再重新开启。站内消息不受影响。"
+        : hasPushControls()
+          ? "本设备推送已关闭，邀请和活动消息仍会保存在站内。"
+          : "开启后可以接收邀请和活动提醒；站内消息始终可用。";
+    renderPushControls(true, enabled, message);
+  } catch {
+    if (revision !== state.pushStatusRevision || token !== state.token) return;
+    renderPushControls(true, state.pushEnabled, "暂时无法读取通知状态，请联网后重试；站内消息不受影响。");
   }
-  button.classList.remove("is-hidden");
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    status.textContent = "当前浏览器不支持手机推送；站内消息仍可查看。";
-    button.classList.add("is-hidden");
-    return;
-  }
-  status.textContent = Notification.permission === "granted" ? "手机通知已授权；邀请和活动动态将尝试送达。" : "点下方按钮授权手机通知；站内消息始终可用。";
 }
 
 function decodeVapidKey(value) {
@@ -1633,52 +1741,97 @@ function decodeVapidKey(value) {
   return Uint8Array.from(atob(padded), (letter) => letter.charCodeAt(0));
 }
 
-async function enablePush() {
-  const button = document.querySelector("#enable-push-button");
-  if (IS_NATIVE_ANDROID) {
-    if (!window.LigongPush || !state.token) {
-      showToast("通知服务暂时不可用，请更新应用后重试");
-      return;
-    }
-    setButtonLoading(button, true, "正在打开系统通知…");
-    try {
-      window.LigongPush.enable(state.token);
-      showToast("请按系统提示允许通知");
-      window.setTimeout(refreshPushStatus, 800);
-      window.setTimeout(refreshPushStatus, 3000);
-      window.setTimeout(refreshPushStatus, 8000);
-    } catch {
-      showToast("系统通知暂时无法打开，请稍后重试");
-    } finally {
-      window.setTimeout(() => setButtonLoading(button, false), 900);
-    }
-    return;
-  }
-  if (isIos() && !isInstalledApp()) {
-    showToast("请用 Safari 添加到主屏幕，然后从桌面打开搭子局");
-    return;
-  }
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
-    showToast("当前浏览器不支持推送，请使用站内消息");
-    return;
-  }
-  setButtonLoading(button, true, "正在连接通知…");
+async function pushWorkerReady() {
+  let timer;
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") throw new Error("暂未获得通知权限，可在系统设置中重新允许");
-    const registration = await navigator.serviceWorker.ready;
-    const { public_key: publicKey } = await api("/push/public-key");
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true, applicationServerKey: decodeVapidKey(publicKey),
-    });
-    const json = subscription.toJSON();
-    await api("/push/subscriptions", {
-      method: "POST", body: JSON.stringify({endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth}),
-    });
-    showToast("手机通知已打开！");
+    return await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error("通知服务连接超时，请稍后重试")), 10000); }),
+    ]);
+  } finally { window.clearTimeout(timer); }
+}
+
+async function enablePush() { return setPushEnabled(true); }
+
+async function waitForNativePushDisabled() {
+  const deadline = Date.now() + 20000;
+  while (nativePushStatus()?.enabled && Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+  }
+  if (nativePushStatus()?.enabled !== false) throw new Error("通知暂时未能关闭，请稍后重试");
+}
+
+async function setPushEnabled(enabled) {
+  if (state.pushBusy) return;
+  const capability = pushCapability();
+  if (!capability || !state.token) {
     await refreshPushStatus();
+    return;
+  }
+  const token = state.token;
+  const checkSession = () => { if (token !== state.token) throw new Error("登录状态已变化，请重新操作"); };
+  state.pushBusy = true;
+  state.pushStatusRevision += 1;
+  const button = document.querySelector("#enable-push-button");
+  renderPushControls(true, state.pushEnabled, enabled ? "正在连接通知服务…" : "正在关闭本设备推送…");
+  setButtonLoading(button, true, enabled ? "正在连接通知…" : "正在关闭通知…");
+  try {
+    if (capability === "native") {
+      const native = nativePushStatus();
+      if (enabled) {
+        window.LigongPush.enable(token);
+        showToast("请按系统提示允许通知");
+      } else {
+        // New shells expose their CID so a network failure cannot look like success.
+        if (native.cid) await api(`/push/native/devices/${encodeURIComponent(native.cid)}`, {method: "DELETE"});
+        checkSession();
+        if (native.cid && typeof window.LigongPush.disableLocal === "function") window.LigongPush.disableLocal();
+        else window.LigongPush.disable(token);
+        await waitForNativePushDisabled();
+        checkSession();
+        showToast("本设备推送已关闭，站内消息仍会保留");
+      }
+      [800, 3000, 8000, 17000].forEach((delay) => window.setTimeout(() => {
+        if (token === state.token) refreshPushStatus();
+      }, delay));
+    } else if (enabled) {
+      // Ask directly from the user's gesture, before waiting on worker/network requests.
+      const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("暂未获得通知权限，可在系统或浏览器设置中重新允许");
+      const registration = await pushWorkerReady();
+      checkSession();
+      const existing = await registration.pushManager.getSubscription();
+      const { public_key: publicKey } = await api("/push/public-key");
+      checkSession();
+      const subscription = existing || await registration.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: decodeVapidKey(publicKey),
+      });
+      checkSession();
+      const json = subscription.toJSON();
+      await api("/push/subscriptions", {
+        method: "POST", body: JSON.stringify({endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth}),
+      });
+      checkSession();
+      rememberPushControls();
+      showToast("本设备活动通知已开启！");
+    } else {
+      const registration = await navigator.serviceWorker.getRegistration();
+      const subscription = await registration?.pushManager?.getSubscription();
+      checkSession();
+      if (subscription) {
+        await api(`/push/subscriptions?endpoint=${encodeURIComponent(subscription.endpoint)}`, {method: "DELETE"});
+        // Delivery is stopped on the server even if the browser cannot clean up offline.
+        await subscription.unsubscribe().catch(() => {});
+      }
+      checkSession();
+      showToast("本设备推送已关闭，站内消息仍会保留");
+    }
   } catch (error) { showToast(error.message); }
-  finally { setButtonLoading(button, false); }
+  finally {
+    state.pushBusy = false;
+    setButtonLoading(button, false);
+    await refreshPushStatus();
+  }
 }
 
 async function checkAndroidRelease() {
@@ -1892,7 +2045,7 @@ async function loadPhotoCard(photo, card, generation) {
   }
 }
 
-function imageToCompressedBlob(file) {
+function imageToCompressedBlob(file, options = {}) {
   return new Promise((resolve, reject) => {
     const sourceUrl = URL.createObjectURL(file);
     const image = new Image();
@@ -1905,7 +2058,7 @@ function imageToCompressedBlob(file) {
       try {
         const longest = Math.max(image.naturalWidth, image.naturalHeight);
         if (!longest) throw new Error("照片尺寸无效，请重新选择");
-        const scale = Math.min(1, 1280 / longest);
+        const scale = Math.min(1, (options.maxEdge || 1280) / longest);
         const canvas = document.createElement("canvas");
         canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
         canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -1914,21 +2067,138 @@ function imageToCompressedBlob(file) {
         context.fillStyle = "#fff";
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const encode = (quality, retry = false) => canvas.toBlob((blob) => {
+        const encode = (quality, attempt = 0) => canvas.toBlob((blob) => {
           if (!blob) { reject(new Error("照片压缩失败，请重新选择")); return; }
-          if (blob.size > 600 * 1024 && !retry) {
-            encode(0.48, true);
+          if (blob.size > (options.targetBytes || 600 * 1024) && attempt < 4) {
+            if (attempt >= 2) {
+              canvas.width = Math.max(1, Math.round(canvas.width * 0.85));
+              canvas.height = Math.max(1, Math.round(canvas.height * 0.85));
+              context.fillStyle = "#fff";
+              context.fillRect(0, 0, canvas.width, canvas.height);
+              context.drawImage(image, 0, 0, canvas.width, canvas.height);
+            }
+            encode(Math.max(0.38, quality - 0.1), attempt + 1);
             return;
           }
           resolve(blob);
         }, "image/jpeg", quality);
-        encode(0.62);
+        encode(options.quality || 0.62);
       } catch (error) {
         reject(error);
       }
     };
     image.src = sourceUrl;
   });
+}
+
+async function compressStudentCardForm(form) {
+  const file = form.get("student_card");
+  if (!(file instanceof File) || !file.size) throw new Error("请先选择学生卡人像面照片");
+  if (file.size > 25 * 1024 * 1024) throw new Error("原照片不能超过 25 MB，请靠近学生卡重新拍摄");
+  const photo = await imageToCompressedBlob(file, {targetBytes: 220 * 1024, quality: 0.6});
+  if (photo.size > 256 * 1024) throw new Error("照片压缩后仍过大，请靠近学生卡重新拍摄");
+  form.set("student_card", photo, "student-card.jpg");
+}
+
+function validatePasswordConfirmation(form) {
+  const confirmation = form.elements.password_confirmation;
+  const matches = form.elements.password.value === confirmation.value;
+  confirmation.setCustomValidity(matches ? "" : "两次输入的密码不一致，请重新确认");
+  if (!matches) {
+    confirmation.reportValidity();
+    confirmation.focus();
+  }
+  return matches;
+}
+
+function openPasswordReset() {
+  state.passwordResetRevision += 1;
+  state.passwordResetToken = null;
+  state.passwordResetStudentId = "";
+  document.querySelector("#password-reset-title").textContent = "用学生卡找回密码";
+  elements.passwordResetCardForm.reset();
+  elements.passwordResetPasswordForm.reset();
+  elements.passwordResetCardForm.classList.remove("is-hidden");
+  elements.passwordResetPasswordForm.classList.add("is-hidden");
+  elements.passwordResetCardForm.elements.student_id.value = elements.loginForm.elements.account.value.includes("@")
+    ? "" : elements.loginForm.elements.account.value.trim();
+  const button = elements.passwordResetCardForm.querySelector('[type="submit"]');
+  button.dataset.dailyBlocked = "";
+  setButtonLoading(button, false);
+  setButtonLoading(elements.passwordResetPasswordForm.querySelector('[type="submit"]'), false);
+  hideInlineError(elements.passwordResetStatus);
+  elements.passwordResetDialog.showModal();
+  elements.passwordResetCardForm.elements.student_id.focus();
+}
+
+async function submitPasswordResetCard(event) {
+  event.preventDefault();
+  const revision = state.passwordResetRevision;
+  const button = event.submitter;
+  setButtonLoading(button, true, "正在压缩照片…");
+  hideInlineError(elements.passwordResetStatus);
+  try {
+    const form = new FormData(elements.passwordResetCardForm);
+    const studentId = String(form.get("student_id") || "").trim();
+    await compressStudentCardForm(form);
+    if (revision !== state.passwordResetRevision) return;
+    button.textContent = "正在核验学生卡…";
+    elements.passwordResetStatus.textContent = "照片已压缩，AI 正在核验学校、照片和学号，请稍候…";
+    elements.passwordResetStatus.classList.remove("is-hidden");
+    elements.passwordResetStatus.classList.add("is-pending");
+    const result = await api("/auth/password-reset/card", {method: "POST", body: form});
+    if (revision !== state.passwordResetRevision) return;
+    elements.passwordResetStatus.textContent = result.message;
+    elements.passwordResetStatus.classList.remove("is-pending");
+    elements.passwordResetStatus.classList.toggle("is-success", result.status === "approved");
+    button.dataset.dailyBlocked = result.can_upload === true ? "" : "true";
+    if (result.status === "approved") {
+      state.passwordResetToken = result.reset_token;
+      state.passwordResetStudentId = studentId;
+      document.querySelector("#password-reset-title").textContent = "设置新密码";
+      elements.passwordResetCardForm.classList.add("is-hidden");
+      elements.passwordResetPasswordForm.classList.remove("is-hidden");
+      elements.passwordResetPasswordForm.elements.password.focus();
+    }
+  } catch (error) {
+    if (revision !== state.passwordResetRevision) return;
+    showInlineError(elements.passwordResetStatus, error.message);
+    if (error.code === "student_card_daily_limit") button.dataset.dailyBlocked = "true";
+  } finally {
+    if (revision === state.passwordResetRevision) setButtonLoading(button, false);
+  }
+}
+
+async function submitNewPassword(event) {
+  event.preventDefault();
+  if (!validatePasswordConfirmation(elements.passwordResetPasswordForm)) return;
+  const button = event.submitter;
+  const revision = state.passwordResetRevision;
+  setButtonLoading(button, true, "正在保存新密码…");
+  try {
+    const form = elements.passwordResetPasswordForm;
+    const result = await api("/auth/password-reset/complete", {
+      method: "POST", body: JSON.stringify({
+        reset_token: state.passwordResetToken,
+        password: form.elements.password.value,
+        password_confirmation: form.elements.password_confirmation.value,
+      }),
+    });
+    if (revision !== state.passwordResetRevision) return;
+    const studentId = state.passwordResetStudentId;
+    state.passwordResetToken = null;
+    elements.passwordResetDialog.close();
+    await logout(false);
+    switchAuthPanel("login");
+    elements.loginForm.elements.account.value = studentId;
+    elements.loginForm.elements.password.value = "";
+    elements.loginForm.elements.password.focus();
+    showToast(result.message);
+  } catch (error) {
+    if (revision === state.passwordResetRevision) showInlineError(elements.passwordResetStatus, error.message);
+  } finally {
+    if (revision === state.passwordResetRevision) setButtonLoading(button, false);
+  }
 }
 
 async function uploadActivityPhoto(event) {
@@ -2420,6 +2690,28 @@ function bindEvents() {
   document.querySelector("#register-tab").addEventListener("click", () => switchAuthPanel("register"));
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.registerForm.addEventListener("submit", handleRegister);
+  document.querySelector("#forgot-password-button").addEventListener("click", openPasswordReset);
+  elements.passwordResetCardForm.addEventListener("submit", submitPasswordResetCard);
+  elements.passwordResetPasswordForm.addEventListener("submit", submitNewPassword);
+  elements.passwordResetDialog.addEventListener("close", () => {
+    state.passwordResetToken = null;
+    state.passwordResetStudentId = "";
+    state.passwordResetRevision += 1;
+    elements.passwordResetPasswordForm.reset();
+  });
+  elements.passwordResetDialog.addEventListener("cancel", (event) => {
+    if (state.passwordResetToken && !confirm("密码还没有修改。关闭后今天无法再次上传学生卡，确定离开吗？")) event.preventDefault();
+  });
+  [elements.registerForm, elements.passwordResetPasswordForm].forEach((form) => {
+    ["password", "password_confirmation"].forEach((name) => form.elements[name].addEventListener("input", () => {
+      form.elements.password_confirmation.setCustomValidity("");
+    }));
+  });
+  elements.passwordResetCardForm.elements.student_id.addEventListener("input", () => {
+    const button = elements.passwordResetCardForm.querySelector('[type="submit"]');
+    button.dataset.dailyBlocked = "";
+    if (!button.hasAttribute("aria-busy")) button.disabled = false;
+  });
   elements.claimStudentIdForm.addEventListener("submit", claimStudentId);
   elements.studentAppealForm.addEventListener("submit", submitStudentAppeal);
   elements.identityCardForm.addEventListener("submit", submitOwnerIdentityCard);
@@ -2496,10 +2788,12 @@ function bindEvents() {
     }
   });
   document.querySelector("#enable-push-button").addEventListener("click", enablePush);
+  document.querySelector("#push-notifications-toggle").addEventListener("change", (event) => setPushEnabled(event.target.checked));
   window.addEventListener("dazi-native-push-status", () => refreshPushStatus());
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.token) loadNotifications();
     if (!document.hidden) checkAndroidRelease();
+    if (!document.hidden && state.token) refreshPushStatus();
   });
 
   document.querySelectorAll(".demo-account").forEach((button) => {
@@ -2603,12 +2897,14 @@ function bindEvents() {
     queueProfileSave(true);
   });
   elements.profileForm.addEventListener("input", (event) => {
+    if (event.target.id === "push-notifications-toggle") return;
     if (event.target.name === "preferred_group_min" || event.target.name === "preferred_group_max") {
       updateGroupRangeOutputs(event.target.name);
     }
     queueProfileSave();
   });
   elements.profileForm.addEventListener("change", (event) => {
+    if (event.target.id === "push-notifications-toggle") return;
     queueProfileSave(true);
   });
   elements.profileRetry.addEventListener("click", () => queueProfileSave(true));
@@ -2648,6 +2944,8 @@ function bindEvents() {
 
   document.querySelectorAll("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.dataset.closeDialog === "password-reset-dialog" && state.passwordResetToken
+        && !confirm("密码还没有修改。关闭后今天无法再次上传学生卡，确定离开吗？")) return;
       if (button.dataset.closeDialog === "activity-photo-dialog") closePhotoViewer();
       document.querySelector(`#${button.dataset.closeDialog}`).close();
     });

@@ -63,6 +63,7 @@ async def test_health_auth_and_duplicate_registration(client: httpx.AsyncClient)
             "student_id": me.json()["student_id"],
             "password": "test-password-123",
             "display_name": "重复用户",
+            "password_confirmation": "test-password-123",
             "campus": "南京",
         },
     )
@@ -96,6 +97,7 @@ async def test_college_choices_and_unknown_legacy_department_uses_default(
             "student_id": "202600001234",
             "password": "test-password-123",
             "display_name": "学院校验",
+            "password_confirmation": "test-password-123",
             "campus": "南京",
             "department": "随手填的学院",
         },
@@ -154,8 +156,8 @@ async def test_college_choices_and_unknown_legacy_department_uses_default(
 async def test_separate_native_app_download_and_version(client: httpx.AsyncClient) -> None:
     version = await client.get("/api/v1/app/native-version")
     assert version.status_code == 200
-    assert version.json()["version_code"] == 6
-    assert version.json()["version_name"] == "1.5-beta"
+    assert version.json()["version_code"] == 7
+    assert version.json()["version_name"] == "1.6-beta"
     assert version.json()["download_url"] == "/downloads/ligong-dazi-native.apk"
     apk = await client.get("/downloads/ligong-dazi-native.apk")
     assert apk.status_code == 200
@@ -426,6 +428,7 @@ async def test_guided_registration_solo_activity_and_timed_leave(
             "student_id": "202600000001",
             "password": "test-password-123",
             "display_name": "画像用户",
+            "password_confirmation": "test-password-123",
             "university": "南京理工大学",
             "campus": "江阴校区",
             "department": "设计科学与艺术学院",
@@ -470,6 +473,8 @@ async def test_guided_registration_solo_activity_and_timed_leave(
             "student_id": "202600000002",
             "password": "test-password-123",
             "display_name": "无效性别",
+            "password_confirmation": "test-password-123",
+            "campus": "南京",
             "gender": "other",
         },
     )

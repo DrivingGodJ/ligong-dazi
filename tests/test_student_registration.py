@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
+from html.parser import HTMLParser
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -11,13 +13,14 @@ from app.identity_verification import StudentCardReview
 from app.migrations import ensure_sqlite_compatibility, remove_emails_from_bound_accounts
 from app.models import StudentIdAppeal, User, utcnow
 from app.notifications import enqueue_legacy_student_id_notices
-from tests.conftest import register_user
+from tests.conftest import STUDENT_CARD_IMAGE, register_user
 
 
 def registration(student_id: str, *, email: str | None = None) -> dict:
     data = {
         "student_id": student_id,
         "password": "test-password-123",
+        "password_confirmation": "test-password-123",
         "display_name": "新同学",
         "campus": "南京",
     }
@@ -35,7 +38,7 @@ def appeal_upload(student_id: str, contact: str = "QQ 12345678") -> dict:
             "ai_consent": "true",
             "registration_json": json.dumps(registration(student_id), ensure_ascii=False),
         },
-        "files": {"student_card": ("student-card.jpg", b"\xff\xd8\xffstudent-card", "image/jpeg")},
+        "files": {"student_card": ("student-card.jpg", STUDENT_CARD_IMAGE, "image/jpeg")},
     }
 
 
@@ -64,13 +67,54 @@ async def test_student_id_registration_login_and_private_profile(client) -> None
                 "email": "new@example.com",
                 "password": "test-password-123",
                 "display_name": "未填学号",
+                "password_confirmation": "test-password-123",
                 "campus": "南京",
             },
         )
     ).status_code == 422
 
 
-async def test_duplicate_id_appeal_requires_card_and_can_enter_manual_review(client) -> None:
+async def test_alphanumeric_student_id_keyboard_and_login(client) -> None:
+    class AccountInputs(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.inputs = []
+
+        def handle_starttag(self, tag, attrs):
+            fields = dict(attrs)
+            if tag == "input" and fields.get("name") in {"account", "student_id"}:
+                if "readonly" not in fields:
+                    self.inputs.append(fields)
+
+    parser = AccountInputs()
+    parser.feed((await client.get("/")).text)
+    # Login, signup, legacy binding, and password recovery share a full text keyboard.
+    assert len(parser.inputs) == 4
+    for field in parser.inputs:
+        assert field["type"] == "text"
+        assert field["inputmode"] == "text"
+        assert field["autocapitalize"] == "none"
+        assert field["autocorrect"] == "off"
+        assert field["spellcheck"] == "false"
+        if field["name"] == "student_id":
+            assert re.fullmatch(field["pattern"], "AB20260001")
+            assert re.fullmatch(field["pattern"], "ab20260001")
+
+    payload = registration("ab20260001")
+    created = await client.post("/api/v1/auth/register", json=payload)
+    assert created.status_code == 201, created.text
+    headers = {"Authorization": f"Bearer {created.json()['access_token']}"}
+    me = (await client.get("/api/v1/users/me", headers=headers)).json()
+    assert me["student_id"] == "AB20260001"
+    for account in ("ab20260001", "AB20260001"):
+        logged_in = await client.post(
+            "/api/v1/auth/token",
+            json={"account": account, "password": payload["password"]},
+        )
+        assert logged_in.status_code == 200
+
+
+async def test_duplicate_id_appeal_requires_card_and_unapproved_record_is_readonly(client) -> None:
     _, owner = await register_user(client, "appeal-owner@example.com", "已有用户")
     sid = (await client.get("/api/v1/users/me", headers=owner)).json()["student_id"]
     duplicate = await client.post("/api/v1/auth/register", json=registration(sid))
@@ -87,15 +131,21 @@ async def test_duplicate_id_appeal_requires_card_and_can_enter_manual_review(cli
     assert no_card.status_code == 422
     appeal = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
     assert appeal.status_code == 201, appeal.text
-    assert appeal.json()["status"] == "manual_review"
+    assert appeal.json()["status"] == "claimant_retry"
     assert (await client.get("/api/v1/users/me", headers=owner)).status_code == 200
     again = await client.post("/api/v1/auth/student-id-appeals", **appeal_upload(sid))
+    # The deterministic fixture has no image model: this is a server error, not a rejection.
     assert again.status_code == 201
+    assert again.json()["id"] == appeal.json()["id"]
+    assert again.json()["service_error"] is True
+    assert again.json()["can_upload"] is True
+    assert "服务器错误" in again.json()["message"]
     listing = await client.get("/api/v1/admin/student-id-appeals")
     assert listing.status_code == 200
     assert len(listing.json()) == 1
     item = listing.json()[0]
     assert item["student_id"] == sid
+    assert item["can_resolve"] is False
     assert item["contact"] == "QQ 12345678"
     assert "contact" not in (await client.get("/api/v1/users/me", headers=owner)).text
     app = client._transport.app  # type: ignore[attr-defined]
@@ -105,10 +155,10 @@ async def test_duplicate_id_appeal_requires_card_and_can_enter_manual_review(cli
     finally:
         app.state.settings.environment = "test"
     handled = await client.post(f"/api/v1/admin/student-id-appeals/{item['id']}/handled")
-    assert handled.status_code == 200
-    assert handled.json()["status"] == "owner_confirmed"
-    assert (await client.get("/api/v1/admin/student-id-appeals")).json() == []
-    assert len((await client.get("/api/v1/admin/student-id-appeals?status=resolved")).json()) == 1
+    assert handled.status_code == 403
+    assert "仅可查看" in handled.json()["detail"]
+    assert len((await client.get("/api/v1/admin/student-id-appeals")).json()) == 1
+    assert (await client.get("/api/v1/admin/student-id-appeals?status=resolved")).json() == []
 
 
 async def test_approved_identity_appeal_freezes_then_transfers_only_login_identity(
@@ -162,7 +212,7 @@ async def test_approved_identity_appeal_freezes_then_transfers_only_login_identi
         "/api/v1/auth/identity-review/card",
         headers=owner_headers,
         data={"ai_consent": "true"},
-        files={"student_card": ("owner-card.jpg", b"\xff\xd8\xffowner-card", "image/jpeg")},
+        files={"student_card": ("owner-card.jpg", STUDENT_CARD_IMAGE, "image/jpeg")},
     )
     assert owner_card.status_code == 200, owner_card.text
     assert owner_card.json()["status"] == "manual_review"
@@ -177,6 +227,7 @@ async def test_approved_identity_appeal_freezes_then_transfers_only_login_identi
     assert item["contact"] == "QQ 12345678"
     assert item["owner_contact"] == "QQ 87654321"
     assert item["claimant_agent_review"]["verdict"] == "approved"
+    assert item["can_resolve"] is True
     assert item["owner_agent_review"]["verdict"] == "approved"
     resolved = await client.post(
         f"/api/v1/admin/student-id-appeals/{item['id']}/resolve",
@@ -362,10 +413,11 @@ async def test_existing_sqlite_users_table_gets_unique_student_id(tmp_path) -> N
         indexes = (await connection.execute(text("PRAGMA index_list(users)"))).all()
         old_user = (
             await connection.execute(
-                text("SELECT email, student_id FROM users WHERE id = 'old-user'")
+                text("SELECT email, student_id, token_version FROM users WHERE id = 'old-user'")
             )
         ).one()
     assert "student_id" in {item[1] for item in columns}
+    assert "token_version" in {item[1] for item in columns}
     assert any(item[1] == "ix_users_student_id" and item[2] for item in indexes)
-    assert old_user == ("old@example.com", None)
+    assert old_user == ("old@example.com", None, 0)
     await engine.dispose()

@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import AsyncIterator
+from io import BytesIO
 
 import httpx
 import pytest
 from asgi_lifespan import LifespanManager
+from PIL import Image
 from pydantic import SecretStr
 
 from app.core import Settings
 from app.main import create_app
+
+_card_buffer = BytesIO()
+Image.new("RGB", (640, 400), "white").save(_card_buffer, format="JPEG")
+STUDENT_CARD_IMAGE = _card_buffer.getvalue()
 
 
 @pytest.fixture
@@ -48,6 +54,7 @@ async def register_user(
             "email": email,
             "student_id": student_id,
             "password": password,
+            "password_confirmation": password,
             "display_name": display_name,
             "university": "南京理工大学",
             "campus": "南京",

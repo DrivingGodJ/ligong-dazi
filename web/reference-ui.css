@@ -537,6 +537,16 @@ body.is-agent-searching > .main-nav { pointer-events: none; }
 .invitation-preference-wide .invitation-preference-copy { min-width: 0; margin-right: auto; }
 .invitation-preference-wide .invitation-preference-copy small { color: #625777; }
 
+.push-preference { margin-top: 0.85rem; gap: 0.75rem; }
+.push-preference .invitation-setting-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.push-preference .invitation-preference-copy strong { display: flex; flex-wrap: wrap; gap: 0.35rem 0.65rem; align-items: center; }
+#push-preference-value { color: var(--brand-700); font-size: 0.78rem; font-weight: 700; }
+.push-preference[aria-busy="true"] { cursor: progress; }
+.push-preference input:disabled + span { opacity: 0.65; }
+@media (prefers-color-scheme: dark) {
+  #push-preference-value { color: #d8baff; }
+}
+
 /* Match results stay compact and readable on phones. */
 #result-content { padding-bottom: 0; }
 #result-content.needs-location { padding-bottom: 0; }
@@ -673,10 +683,15 @@ body > .main-nav .nav-button.is-active .nav-face-icon circle:first-child { filte
 
 @media (min-width: 681px) {
   body:not(.has-app) .app-header:not(.admin-header) { display: none; }
-  body:not(.has-app) main { width: min(520px, 100%); padding: 0; }
-  .auth-shell { min-height: 100svh; }
+  body:not(.has-app) main { width: min(1180px, 100%); padding: 2rem; }
+  .auth-shell { min-height: calc(100svh - 4rem); }
+  .auth-intro, .auth-card { min-width: 0; }
   .page-heading-floral { min-height: 300px; }
   .request-panel { padding: 1.8rem; }
+}
+
+@media (min-width: 681px) and (max-width: 980px) {
+  body:not(.has-app) main { width: min(640px, 100%); }
 }
 
 @media (max-width: 680px) {

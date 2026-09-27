@@ -10,10 +10,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app.account_recovery import router as account_recovery_router
 from app.activity_media import cleanup_expired_activity_photos
 from app.admin import load_persisted_ai_config
 from app.admin import router as admin_router
@@ -141,11 +142,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
+    app.include_router(account_recovery_router)
     app.include_router(admin_router)
     app.mount("/static", StaticFiles(directory=web_directory), name="static")
 
-    @app.get("/", include_in_schema=False)
-    async def frontend() -> FileResponse:
+    @app.get("/", include_in_schema=False, response_model=None)
+    async def frontend() -> FileResponse | HTMLResponse:
+        if app_settings.student_card_uploads_unlimited:
+            content = await asyncio.to_thread(
+                (web_directory / "index.html").read_text, encoding="utf-8"
+            )
+            return HTMLResponse(
+                content.replace(
+                    'data-student-card-limit="daily"', 'data-student-card-limit="unlimited"'
+                ),
+                headers={"Cache-Control": "no-store"},
+            )
         return FileResponse(web_directory / "index.html")
 
     @app.get("/admin", include_in_schema=False)

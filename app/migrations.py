@@ -10,6 +10,7 @@ from app.models import User, new_id
 SQLITE_COMPATIBILITY_COLUMNS = {
     "users": {
         "student_id": "VARCHAR(24)",
+        "token_version": "INTEGER NOT NULL DEFAULT 0",
         "gender": "VARCHAR(20) NOT NULL DEFAULT 'undisclosed'",
         "hidden_profile": "JSON NOT NULL DEFAULT '{}'",
         "hobby_skills": "JSON NOT NULL DEFAULT '[]'",

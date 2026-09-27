@@ -51,7 +51,7 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends Activity {
     public static final String EXTRA_OPEN_URL = "dazi_open_url";
     private static final String HOST = "ligong-dazi.zeabur.app";
-    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=6";
+    private static final String START_URL = "https://" + HOST + "/?source=android-native&version=" + BuildConfig.VERSION_CODE;
     private static final int PICK_PHOTO = 10;
     private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
@@ -269,18 +269,26 @@ public class MainActivity extends Activity {
         String relative = intent == null ? null : intent.getStringExtra(EXTRA_OPEN_URL);
         if (relative != null && relative.startsWith("/") && !relative.startsWith("//")) {
             String separator = relative.contains("?") ? "&" : "?";
-            return "https://" + HOST + relative + separator + "source=android-native&version=6";
+            return "https://" + HOST + relative + separator + "source=android-native&version=" + BuildConfig.VERSION_CODE;
         }
         return START_URL;
     }
 
     private boolean notificationPermissionGranted() {
-        return Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
-                this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        return (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+                && androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled();
     }
 
     private void initializeNativePush() {
         PushManager.getInstance().initialize(getApplicationContext());
+        PushManager.getInstance().turnOnPush(getApplicationContext());
+    }
+
+    private void pauseNativePush() {
+        pendingPushToken = null;
+        PushManager.getInstance().turnOffPush(getApplicationContext());
+        notifyPushStatus();
     }
 
     private void requestNativePush(String accessToken) {
@@ -304,6 +312,7 @@ public class MainActivity extends Activity {
             status.put("enabled", NativePushRegistrar.isEnabled(this));
             status.put("permission", notificationPermissionGranted());
             status.put("connected", !NativePushRegistrar.getCid(this).isEmpty());
+            status.put("cid", NativePushRegistrar.getCid(this));
         } catch (Exception ignored) {
         }
         webView.evaluateJavascript(
@@ -422,6 +431,7 @@ public class MainActivity extends Activity {
                 status.put("enabled", NativePushRegistrar.isEnabled(MainActivity.this));
                 status.put("permission", notificationPermissionGranted());
                 status.put("connected", !NativePushRegistrar.getCid(MainActivity.this).isEmpty());
+                status.put("cid", NativePushRegistrar.getCid(MainActivity.this));
             } catch (Exception ignored) {
             }
             return status.toString();
@@ -444,6 +454,13 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public void disable(String accessToken) {
             NativePushRegistrar.disable(MainActivity.this, accessToken);
+            runOnUiThread(() -> pauseNativePush());
+        }
+
+        @JavascriptInterface public void disableLocal() {
+            // The webpage has already removed this CID from the server.
+            NativePushRegistrar.disableLocally(MainActivity.this);
+            runOnUiThread(() -> pauseNativePush());
         }
     }
 

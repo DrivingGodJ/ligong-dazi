@@ -14,6 +14,7 @@ async def test_optional_search_location_requires_a_place_only_when_creating(clie
             "student_id": "202600000003",
             "password": "test-password-123",
             "display_name": "可以被邀请的搭子",
+            "password_confirmation": "test-password-123",
             "campus": "南京",
         },
     )

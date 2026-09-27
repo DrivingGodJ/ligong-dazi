@@ -809,6 +809,16 @@ a:focus-visible {
   font-weight: 650;
 }
 
+.form-error.is-success {
+  color: var(--success-700);
+  background: var(--success-100);
+}
+
+.form-error.is-pending {
+  color: var(--brand-700);
+  background: var(--brand-50);
+}
+
 .app-shell {
   max-width: 1320px;
   margin: 0 auto;

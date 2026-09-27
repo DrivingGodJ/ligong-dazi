@@ -9,12 +9,14 @@ from pydantic import (
     EmailStr,
     Field,
     SecretStr,
+    computed_field,
     field_validator,
     model_validator,
 )
 
 from app.campus import require_campus
 from app.colleges import match_college
+from app.identity_appeals import can_resolve_identity_appeal
 
 
 class ApiModel(BaseModel):
@@ -68,6 +70,7 @@ class RegisterRequest(ApiModel):
     # Kept for older API clients; the current signup form does not ask for email.
     email: EmailStr | None = None
     password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str = Field(min_length=8, max_length=128)
     display_name: str = Field(min_length=1, max_length=80)
     university: str = Field(default="南京理工大学", min_length=2, max_length=120)
     campus: Campus
@@ -114,6 +117,8 @@ class RegisterRequest(ApiModel):
 
     @model_validator(mode="after")
     def validate_registration_group_range(self) -> RegisterRequest:
+        if self.password != self.password_confirmation:
+            raise ValueError("两次输入的密码不一致，请重新确认")
         if self.preferred_group_min > self.preferred_group_max:
             raise ValueError("preferred_group_min 不能大于 preferred_group_max")
         return self
@@ -169,11 +174,18 @@ class StudentIdAppealPublic(ApiModel):
     created_at: datetime
     resolved_at: datetime | None
 
+    @computed_field
+    @property
+    def can_resolve(self) -> bool:
+        return can_resolve_identity_appeal(self.status, self.claimant_agent_review)
+
 
 class StudentIdAppealReceipt(ApiModel):
     id: str
     status: str
     message: str
+    can_upload: bool = False
+    service_error: bool = False
 
 
 class FrozenAccountStatus(ApiModel):
@@ -182,6 +194,31 @@ class FrozenAccountStatus(ApiModel):
     status: str
     deadline: datetime | None
     message: str
+    can_upload: bool = True
+    next_upload_at: datetime | None = None
+    service_error: bool = False
+
+
+class PasswordResetReview(ApiModel):
+    status: Literal["approved", "retry", "retry_tomorrow", "server_error"]
+    message: str
+    can_upload: bool = False
+    service_error: bool = False
+    reset_token: str | None = None
+    expires_at: datetime | None = None
+    next_upload_at: datetime | None = None
+
+
+class PasswordResetRequest(ApiModel):
+    reset_token: str = Field(min_length=32, max_length=200)
+    password: str = Field(min_length=8, max_length=128)
+    password_confirmation: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def confirm_password(self) -> PasswordResetRequest:
+        if self.password != self.password_confirmation:
+            raise ValueError("两次输入的密码不一致，请重新确认")
+        return self
 
 
 class IdentityContactUpdate(ApiModel):

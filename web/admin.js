@@ -126,25 +126,30 @@ function renderAppeals() {
     agent_review: "AI 正在初审申诉材料",
     awaiting_owner: "原账号 24 小时举证中",
     owner_review: "AI 正在初审原账号材料",
+    claimant_retry: "申诉人材料未通过（只读）",
+    owner_retry: "原账号已举证，等待次日重试（不自动注销）",
     manual_review: "等待人工决定归属",
     claimant_rejected: "申诉材料未通过",
     owner_confirmed: "已保留原账号",
     transferred: "已交接给申诉人",
   };
+  const statusLabel = (item) => item.status === "claimant_retry" && item.claimant_agent_review?.service_error
+    ? "服务器核验异常（只读，可重试）"
+    : statusLabels[item.status] || item.status;
   elements.appealList.innerHTML = state.appeals.map((item) => `<article class="admin-appeal-card">
     <div class="appeal-card-heading"><strong>学号 ${escapeHtml(item.student_id)}</strong><time datetime="${escapeHtml(item.created_at)}">${escapeHtml(formatTime(item.created_at))}</time></div>
     <p><b>联系申请人：</b><span>${escapeHtml(item.contact)}</span></p>
     ${item.owner_contact ? `<p><b>联系原账号：</b><span>${escapeHtml(item.owner_contact)}</span></p>` : ""}
     ${item.description ? `<p><b>补充说明：</b>${escapeHtml(item.description)}</p>` : ""}
-    <p><b>当前进度：</b>${escapeHtml(statusLabels[item.status] || item.status)}</p>
+    <p><b>当前进度：</b>${escapeHtml(statusLabel(item))}</p>
     ${item.owner_deadline ? `<p><b>原账号截止：</b>${escapeHtml(formatTime(item.owner_deadline))}</p>` : ""}
     ${item.resolution_note ? `<p><b>处理说明：</b>${escapeHtml(item.resolution_note)}</p>` : ""}
     <div class="appeal-materials">
       <a class="button button-quiet button-small" href="/api/v1/admin/student-id-appeals/${escapeHtml(item.id)}/card/claimant" target="_blank" rel="noopener">查看申诉人学生卡</a>
       ${item.owner_agent_review && Object.keys(item.owner_agent_review).length ? `<a class="button button-quiet button-small" href="/api/v1/admin/student-id-appeals/${escapeHtml(item.id)}/card/owner" target="_blank" rel="noopener">查看原账号学生卡</a>` : ""}
     </div>
-    <div class="appeal-card-footer"><span>${escapeHtml(statusLabels[item.status] || item.status)}</span>
-    ${["agent_review", "awaiting_owner", "owner_review", "manual_review"].includes(item.status) ? `<span class="appeal-resolution-actions"><button class="button button-quiet button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="keep_owner">保留原账号</button><button class="button button-primary button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="transfer_to_claimant">交给申诉人</button></span>` : ""}</div>
+    <div class="appeal-card-footer"><span>${escapeHtml(statusLabel(item))}</span>
+    ${item.can_resolve === true ? `<span class="appeal-resolution-actions"><button class="button button-quiet button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="keep_owner">保留原账号</button><button class="button button-primary button-small" type="button" data-resolve-appeal="${escapeHtml(item.id)}" data-decision="transfer_to_claimant">交给申诉人</button></span>` : ["agent_review", "claimant_retry", "awaiting_owner", "owner_review", "manual_review", "owner_retry"].includes(item.status) ? `<span>${item.claimant_agent_review?.service_error ? "服务器核验异常，不扣次数，可重试；本条记录仅可查看。" : "申诉人初审未通过或尚未完成，仅可查看材料，不能更改归属。"}</span>` : ""}</div>
   </article>`).join("");
 }
 

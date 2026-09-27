@@ -12,15 +12,15 @@
   "navigationDividerColorDark": "#44394E",
   "backgroundColor": "#F7F3FF",
   "enableNotifications": true,
-  "startUrl": "/?source=android-app&version=1",
+  "startUrl": "/?source=android-app&version=2",
   "iconUrl": "https://ligong-dazi.zeabur.app/static/icon-512.png",
   "splashScreenFadeOutDuration": 300,
   "signingKey": {
     "path": "android.keystore",
     "alias": "android"
   },
-  "appVersionName": "1",
-  "appVersionCode": 1,
+  "appVersionName": "1.6-beta",
+  "appVersionCode": 2,
   "shortcuts": [],
   "generatorApp": "bubblewrap-cli",
   "webManifestUrl": "https://ligong-dazi.zeabur.app/manifest.webmanifest",
@@ -42,5 +42,5 @@
   "fileHandlers": [],
   "launchHandlerClientMode": "",
   "displayOverride": [],
-  "appVersion": "1"
+  "appVersion": "1.6-beta"
 }

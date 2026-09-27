@@ -66,11 +66,15 @@ final class NativePushRegistrar {
         SharedPreferences prefs = preferences(appContext);
         String token = validToken(accessToken) ? accessToken : prefs.getString(KEY_TOKEN, "");
         String cid = prefs.getString(KEY_CID, "");
+        // Stop locally now; an older DELETE must never wipe a later re-enable.
+        clearAccount(prefs);
         if (validToken(token) && cid.matches("[A-Za-z0-9_-]{16,160}")) {
-            runRequest(appContext, "DELETE", "/push/native/devices/" + cid, token, cid, true);
-        } else {
-            clearAccount(prefs);
+            runRequest(appContext, "DELETE", "/push/native/devices/" + cid, token, cid, false);
         }
+    }
+
+    static void disableLocally(Context context) {
+        clearAccount(preferences(context));
     }
 
     private static boolean validToken(String token) {

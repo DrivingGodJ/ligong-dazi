@@ -16,6 +16,7 @@ dependencies = [
   "uvicorn[standard]>=0.35,<1",
   "pywebpush>=2.0,<3",
   "python-multipart>=0.0.20,<1",
+  "pillow>=11,<13",
 ]
 
 [dependency-groups]

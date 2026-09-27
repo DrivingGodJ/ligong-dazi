@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
@@ -41,16 +42,22 @@ from app.core import (
     DatabaseRuntime,
     Settings,
     create_access_token,
-    decode_access_token,
+    decode_access_token_payload,
     hash_password,
     verify_password,
 )
 from app.identity_appeals import (
-    redact_claimant_registration,
+    ACTIVE_APPEAL_STATUSES,
+    apply_owner_card_review,
     remove_appeal_files,
     transfer_student_id,
 )
-from app.identity_verification import review_student_card
+from app.identity_verification import (
+    STUDENT_CARD_SERVER_ERROR_MESSAGE,
+    StudentCardReview,
+    review_student_card,
+    student_card_service_error,
+)
 from app.matching import MatchContext, location_similarity
 from app.models import (
     Activity,
@@ -138,8 +145,17 @@ from app.schemas import (
     UserSystemProfile,
     normalize_student_id,
 )
+from app.student_cards import (
+    card_upload_available,
+    ensure_card_upload_available,
+    next_upload_time,
+    read_student_card,
+    release_card_upload,
+    reserve_card_upload,
+)
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 auth_scheme = HTTPBearer(auto_error=False)
 MATCH_COOLDOWN_SECONDS = 60
 PROFILE_SUMMARY_COOLDOWN_SECONDS = 5 * 60
@@ -168,7 +184,8 @@ async def get_authenticated_user(
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="需要登录")
     try:
-        user_id = decode_access_token(credentials.credentials, settings)
+        claims = decode_access_token_payload(credentials.credentials, settings)
+        user_id = str(claims["sub"])
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -177,6 +194,8 @@ async def get_authenticated_user(
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
+    if claims.get("ver", 0) != user.token_version:
+        raise HTTPException(status_code=401, detail="密码已更新，请重新登录")
     return user
 
 
@@ -193,7 +212,8 @@ async def get_optional_authenticated_user(
     if credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录凭证格式无效")
     try:
-        user_id = decode_access_token(credentials.credentials, settings)
+        claims = decode_access_token_payload(credentials.credentials, settings)
+        user_id = str(claims["sub"])
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -202,6 +222,8 @@ async def get_optional_authenticated_user(
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
+    if claims.get("ver", 0) != user.token_version:
+        raise HTTPException(status_code=401, detail="密码已更新，请重新登录")
     return user
 
 
@@ -254,22 +276,13 @@ async def save_identity_card(
     side: str,
     settings: Settings,
 ) -> tuple[str, str, bytes]:
-    media_type = (upload.content_type or "").lower()
-    if media_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(status_code=422, detail="学生卡照片请选择 JPG、PNG 或 WebP 格式")
-    try:
-        content = await upload.read(settings.identity_card_max_bytes + 1)
-    finally:
-        await upload.close()
-    content, media_type, extension = validate_image_content(
-        content, media_type, settings.identity_card_max_bytes
-    )
+    content, media_type, extension = await read_student_card(upload, settings)
     root = await asyncio.to_thread(
         lambda: Path(settings.identity_appeal_directory).expanduser().resolve()
     )
     directory = root / appeal_id
     await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
-    path = directory / f"{side}.{extension}"
+    path = directory / f"{side}-{new_id()}.{extension}"
     await asyncio.to_thread(path.write_bytes, content)
     return str(path), media_type, content
 
@@ -612,6 +625,16 @@ async def register(
     return TokenResponse(access_token=token, expires_at=expires_at)
 
 
+async def safely_review_student_card(
+    content: bytes, media_type: str, student_id: str, settings: Settings
+) -> StudentCardReview:
+    try:
+        return await review_student_card(content, media_type, student_id, settings)
+    except Exception as exc:
+        logger.error("学生卡审核服务异常：%s", type(exc).__name__)
+        return student_card_service_error(f"图片审核服务异常：{type(exc).__name__}")
+
+
 @router.post(
     "/auth/student-id-appeals",
     response_model=StudentIdAppealReceipt,
@@ -644,30 +667,38 @@ async def create_student_id_appeal(
             raise HTTPException(status_code=409, detail="这个学号已经属于当前账号")
         if claimant.student_id is not None:
             raise HTTPException(status_code=409, detail="当前账号已经绑定学号，不能申诉另一个学号")
+    subject = f"user:{claimant.id}" if claimant else f"claimant:{normalized_id}"
+    await ensure_card_upload_available(session, subject, settings)
     client_host = request.client.host if request.client else "unknown"
     attempts: dict[str, list[float]] = request.app.state.appeal_attempts
     now = time.monotonic()
     recent = [stamp for stamp in attempts.get(client_host, []) if now - stamp < 3600]
-    if len(recent) >= 30:
+    if not settings.student_card_uploads_unlimited and len(recent) >= 30:
         raise HTTPException(status_code=429, detail="申诉提交较频繁，请稍后再试")
-    recent.append(now)
-    attempts[client_host] = recent
+    if not settings.student_card_uploads_unlimited:
+        recent.append(now)
+        attempts[client_host] = recent
     existing = await session.scalar(
         select(StudentIdAppeal).where(
             StudentIdAppeal.student_id == normalized_id,
-            StudentIdAppeal.status.in_(
-                ["agent_review", "awaiting_owner", "owner_review", "manual_review"]
-            ),
+            StudentIdAppeal.status.in_(ACTIVE_APPEAL_STATUSES),
         )
     )
     if existing is not None:
-        if existing.contact != contact:
+        if existing.contact != contact or existing.claimant_user_id != (
+            claimant.id if claimant else None
+        ):
             raise HTTPException(status_code=409, detail="这个学号已有一条核验中的申诉")
-        return StudentIdAppealReceipt(
-            id=existing.id,
-            status=existing.status,
-            message="这条申诉正在处理中，请勿重复提交。",
-        )
+        if existing.status not in {"claimant_retry", "agent_review"} and not (
+            existing.status == "manual_review"
+            and existing.claimant_agent_review.get("verdict") != "approved"
+            and not owner.identity_frozen
+        ):
+            return StudentIdAppealReceipt(
+                id=existing.id,
+                status=existing.status,
+                message="这条申诉正在处理中，请勿重复提交。",
+            )
 
     profile: dict = {}
     password_hash: str | None = None
@@ -682,11 +713,18 @@ async def create_student_id_appeal(
         if registration.student_id != normalized_id:
             raise HTTPException(status_code=422, detail="申诉学号与注册学号不一致")
         profile = registration.model_dump(
-            mode="json", exclude={"student_id", "password", "email", "university"}
+            mode="json",
+            exclude={"student_id", "password", "password_confirmation", "email", "university"},
         )
         password_hash = hash_password(registration.password)
+        if (
+            existing
+            and existing.claimant_password_hash
+            and not verify_password(registration.password, existing.claimant_password_hash)
+        ):
+            raise HTTPException(status_code=409, detail="请使用原申诉时的注册资料重试")
 
-    appeal = StudentIdAppeal(
+    appeal = existing or StudentIdAppeal(
         id=new_id(),
         student_id=normalized_id,
         owner_id=owner.id,
@@ -697,7 +735,10 @@ async def create_student_id_appeal(
         claimant_profile=profile,
         claimant_password_hash=password_hash,
     )
-    session.add(appeal)
+    if existing and not existing.claimant_password_hash and profile:
+        appeal.claimant_profile = profile
+        appeal.claimant_password_hash = password_hash
+    old_path = appeal.claimant_card_path
     path: str | None = None
     try:
         path, media_type, content = await save_identity_card(
@@ -705,10 +746,17 @@ async def create_student_id_appeal(
         )
         appeal.claimant_card_path = path
         appeal.claimant_card_media_type = media_type
-        review = await review_student_card(content, media_type, normalized_id, settings)
+        appeal.status = "agent_review"
+        session.add(appeal)
+        attempt_id = await reserve_card_upload(session, subject, "claimant_appeal", settings)
+        review = await safely_review_student_card(content, media_type, normalized_id, settings)
+        if review.service_error:
+            await release_card_upload(session, attempt_id)
         appeal.claimant_agent_review = review.as_dict()
-        can_transfer = claimant is not None or (profile and password_hash)
-        if review.verdict == "approved" and can_transfer:
+        can_transfer = claimant is not None or (
+            appeal.claimant_profile and appeal.claimant_password_hash
+        )
+        if not review.service_error and review.verdict == "approved" and can_transfer:
             appeal.status = "awaiting_owner"
             appeal.owner_deadline = utcnow() + timedelta(days=1)
             owner.identity_frozen = True
@@ -723,23 +771,30 @@ async def create_student_id_appeal(
                 "/?identity-review=1",
             )
             message = "AI 初审通过，原账号已冻结并进入 24 小时举证期。"
-        elif review.verdict == "rejected":
-            appeal.status = "claimant_rejected"
-            appeal.resolution_note = review.reason
-            appeal.resolved_at = utcnow()
-            redact_claimant_registration(appeal)
-            message = "材料未通过初审，账号不会被冻结；如有疑问请联系管理员。"
         else:
-            appeal.status = "manual_review"
+            appeal.status = "claimant_retry"
             appeal.resolution_note = review.reason
-            message = "材料需要人工复核，账号暂不会被冻结。管理员会按你留下的方式联系。"
+            message = (
+                "材料未通过识别，原账号不会被冻结。每天仅可上传一次，请明天重新拍清学生卡后重试。"
+            )
+            if review.service_error:
+                message = STUDENT_CARD_SERVER_ERROR_MESSAGE + "原账号不会被冻结。"
+            elif settings.student_card_uploads_unlimited:
+                message = (
+                    "材料未通过识别，请确认学校、照片和学号清晰且正确。"
+                    "原账号不会被冻结。本地测试不限次数，可以立即重新上传。"
+                )
         session.add(
             SystemEvent(
                 category="identity_appeal",
                 status=appeal.status,
                 title="收到学号占用申诉",
                 message=f"学号 {normalized_id} 的材料初审结果：{message}",
-                details={"appeal_id": appeal.id, "verdict": review.verdict},
+                details={
+                    "appeal_id": appeal.id,
+                    "verdict": review.verdict,
+                    "service_error": review.service_error,
+                },
             )
         )
         await session.commit()
@@ -748,9 +803,16 @@ async def create_student_id_appeal(
         if path:
             await asyncio.to_thread(Path(path).unlink, missing_ok=True)
         raise
-    if appeal.status == "claimant_rejected":
-        await asyncio.to_thread(remove_appeal_files, appeal)
-    return StudentIdAppealReceipt(id=appeal.id, status=appeal.status, message=message)
+    if old_path and old_path != path:
+        await asyncio.to_thread(Path(old_path).unlink, missing_ok=True)
+    return StudentIdAppealReceipt(
+        id=appeal.id,
+        status=appeal.status,
+        message=message,
+        can_upload=(settings.student_card_uploads_unlimited or review.service_error)
+        and appeal.status == "claimant_retry",
+        service_error=review.service_error,
+    )
 
 
 @router.post("/auth/token", response_model=TokenResponse)
@@ -767,7 +829,7 @@ async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDe
         )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已停用")
-    token, expires_at = create_access_token(user.id, settings)
+    token, expires_at = create_access_token(user.id, settings, user.token_version)
     return TokenResponse(
         access_token=token,
         expires_at=expires_at,
@@ -798,6 +860,10 @@ def frozen_status_message(appeal: StudentIdAppeal) -> str:
         return "请在截止时间前上传学生卡人像面，或主动放弃账号。"
     if appeal.status == "owner_review":
         return "你的材料正在由审核 Agent 检查，请稍候。"
+    if appeal.status == "owner_retry":
+        if appeal.owner_agent_review.get("service_error"):
+            return STUDENT_CARD_SERVER_ERROR_MESSAGE + "你已提交照片，不会自动注销账号。"
+        return "材料未通过识别，请明天重新上传；你已提交照片，不会因识别失败自动注销。"
     if appeal.status == "manual_review":
         return "双方材料都需要人工核查，请补充联系方式并等待管理员联系。"
     return "身份核验状态已经变化，请联系管理员。"
@@ -807,14 +873,25 @@ def frozen_status_message(appeal: StudentIdAppeal) -> str:
 async def read_identity_review(
     user: AuthenticatedUser,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> FrozenAccountStatus:
     appeal = await frozen_identity_appeal(session, user)
+    available = await card_upload_available(session, f"user:{user.id}", settings)
+    message = frozen_status_message(appeal)
+    service_error = bool(appeal.owner_agent_review.get("service_error"))
+    if available and appeal.status in {"owner_retry", "owner_review"} and not service_error:
+        message = "今天可以重新上传学生卡；你已提交过照片，不会因识别失败自动注销。"
+        if settings.student_card_uploads_unlimited:
+            message = "本地测试不限次数，可以立即重新上传学生卡；不会因识别失败自动注销。"
     return FrozenAccountStatus(
         appeal_id=appeal.id,
         student_id=appeal.student_id,
         status=appeal.status,
         deadline=appeal.owner_deadline,
-        message=frozen_status_message(appeal),
+        message=message,
+        can_upload=available and appeal.status in {"awaiting_owner", "owner_retry", "owner_review"},
+        next_upload_at=None if available else next_upload_time(),
+        service_error=service_error,
     )
 
 
@@ -827,23 +904,52 @@ async def submit_owner_identity_card(
     ai_consent: Annotated[bool, Form()],
 ) -> FrozenAccountStatus:
     appeal = await frozen_identity_appeal(session, user)
-    if appeal.status not in {"awaiting_owner", "owner_review"}:
+    if appeal.status not in {"awaiting_owner", "owner_retry", "owner_review"}:
         raise HTTPException(status_code=409, detail="当前状态不需要重复上传学生卡")
     if not ai_consent:
         raise HTTPException(status_code=422, detail="请先同意学生卡照片用于身份初审")
-    appeal.status = "owner_review"
+    await ensure_card_upload_available(session, f"user:{user.id}", settings)
     old_path = appeal.owner_card_path
-    path, media_type, content = await save_identity_card(
-        student_card, appeal.id, "owner", settings
+    path, media_type, content = await save_identity_card(student_card, appeal.id, "owner", settings)
+    claimed = await session.execute(
+        update(StudentIdAppeal)
+        .where(
+            StudentIdAppeal.id == appeal.id,
+            StudentIdAppeal.status.in_(["awaiting_owner", "owner_retry", "owner_review"]),
+            or_(
+                StudentIdAppeal.owner_card_path.is_not(None),
+                StudentIdAppeal.owner_deadline > utcnow(),
+            ),
+        )
+        .values(
+            status="owner_review",
+            owner_card_path=path,
+            owner_card_media_type=media_type,
+            owner_deadline=None,
+        )
     )
-    appeal.owner_card_path = path
-    appeal.owner_card_media_type = media_type
-    review = await review_student_card(content, media_type, appeal.student_id, settings)
-    appeal.owner_agent_review = review.as_dict()
-    if review.verdict == "approved":
-        appeal.status = "manual_review"
-        appeal.resolution_note = "双方学生卡材料均通过 AI 初审，等待人工核验联系方式"
-        message = "双方材料都通过了初审，请补充联系方式并等待管理员联系。"
+    if not claimed.rowcount:
+        await session.rollback()
+        await asyncio.to_thread(Path(path).unlink, missing_ok=True)
+        raise HTTPException(status_code=409, detail="举证期已结束或材料正在审核，请刷新状态")
+    try:
+        attempt_id = await reserve_card_upload(session, f"user:{user.id}", "owner_appeal", settings)
+    except Exception:
+        await asyncio.to_thread(Path(path).unlink, missing_ok=True)
+        raise
+    review = await safely_review_student_card(content, media_type, appeal.student_id, settings)
+    if review.service_error:
+        await release_card_upload(session, attempt_id)
+    message = apply_owner_card_review(appeal, review.as_dict())
+    can_retry = (settings.student_card_uploads_unlimited or review.service_error) and (
+        appeal.status == "owner_retry"
+    )
+    if can_retry and not review.service_error:
+        message = (
+            "未能完成学生卡核验。本地测试不限次数，可以立即重新上传；"
+            "你已提交照片，不会因识别失败自动注销。"
+        )
+    if not review.service_error and review.verdict == "approved":
         await enqueue_notification(
             session,
             user.id,
@@ -853,23 +959,17 @@ async def submit_owner_identity_card(
             "双方材料均通过初审，请在核验页面补充联系方式，等待管理员联系。",
             "/?identity-review=1",
         )
-    elif review.verdict == "rejected":
-        claimant = await transfer_student_id(session, appeal, "原账号提交的材料未通过初审")
-        if claimant is None:
-            message = frozen_status_message(appeal)
-        else:
-            message = "材料未通过初审，学号已交接给申诉人。"
-    else:
-        appeal.status = "manual_review"
-        appeal.resolution_note = review.reason
-        message = "材料无法由 AI 明确判断，已转人工复核。"
     session.add(
         SystemEvent(
             category="identity_appeal",
             status=appeal.status,
             title="原账号提交身份材料",
             message=f"学号 {appeal.student_id} 的原账号材料结果：{message}",
-            details={"appeal_id": appeal.id, "verdict": review.verdict},
+            details={
+                "appeal_id": appeal.id,
+                "verdict": review.verdict,
+                "service_error": review.service_error,
+            },
         )
     )
     await session.commit()
@@ -883,6 +983,11 @@ async def submit_owner_identity_card(
         status=appeal.status,
         deadline=appeal.owner_deadline,
         message=message,
+        can_upload=can_retry,
+        next_upload_at=None
+        if settings.student_card_uploads_unlimited or review.service_error
+        else next_upload_time(),
+        service_error=review.service_error,
     )
 
 
@@ -2639,6 +2744,23 @@ async def save_push_subscription(
         subscription.auth = payload.auth
     await session.commit()
     return {"status": "subscribed"}
+
+
+@router.get("/push/subscriptions")
+async def read_push_subscription(
+    current_user: CurrentUser,
+    session: SessionDep,
+    response: Response,
+    endpoint: str = Query(max_length=2048),
+) -> dict[str, bool]:
+    subscription = await session.scalar(
+        select(PushSubscription.id).where(
+            PushSubscription.user_id == current_user.id,
+            PushSubscription.endpoint == endpoint,
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"subscribed": subscription is not None}
 
 
 @router.delete("/push/subscriptions")
