@@ -1,5 +1,7 @@
 # 理工搭子局
 
+[打开理工搭子局](https://ligong-dazi.zeabur.app/) · [下载安卓独立应用版](https://ligong-dazi.zeabur.app/downloads/ligong-dazi-native.apk) · [查看 GitHub Releases](https://github.com/DrivingGodJ/ligong-dazi/releases)
+
 这是「理工搭子局」的 FastAPI 后端 MVP。它把搭子匹配设计成一个可审计的执行型 Agent：Agent 可以查询已有活动、查询可用用户、计算匹配度并生成推荐；创建活动、发送邀请、加入活动等写操作必须等用户确认后才执行。
 
 最新一轮功能变化见 [CHANGELOG.md](CHANGELOG.md)。
@@ -131,7 +133,7 @@ uv run python -m scripts.seed_demo
 
 应用版 `1.7-beta` 使用个推原生通知，并支持在画像设置中关闭和重新开启本设备推送。用户须在画像页主动打开，Android 13 及以上还会显示系统权限确认；本机推送标识随后绑定到当前账号，退出登录时解绑。服务器需要私密配置 `DAZI_GETUI_APP_ID`、`DAZI_GETUI_APP_KEY` 和 `DAZI_GETUI_MASTER_SECRET`，后两项绝不能写进 APK 或仓库。当前只接入个推基础通道，没有配置小米、华为、OPPO、vivo 等厂商离线通道，因此应用被系统彻底结束后的送达率会受手机后台策略影响。尚未经过安卓真机收发验收，不要把构建通过等同于可靠送达。
 
-应用版工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成原签名 APK；构建会从 `web/` 复制允许的 UI 文件，不包含管理页、用户数据、服务器密钥或其他 APK。版本号同步写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL，接口 `/api/v1/app/native-version` 提供版本信息。安装包内只允许出现公开 App ID，App Key、App Secret 和 Master Secret 均不得进入客户端。
+应用版工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成原签名 APK；构建会从 `web/` 复制允许的 UI 文件，不包含管理页、用户数据、服务器密钥或其他 APK。版本号同步写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL，接口 `/api/v1/app/native-version` 提供版本信息。新应用版在前台启动时由原生层查询版本，发现新版后征得用户同意，再下载并校验 SHA-256、包名、版本号及签名，最后交给安卓系统确认安装；离线或查询失败不妨碍使用旧版。画像页的更新链接也是手动重试入口。升级必须继续使用相同的签名密钥；已安装的旧版本仍需先通过原有画像页下载一次新版，之后才有原生更新提示。安装包内只允许出现公开 App ID，App Key、App Secret 和 Master Secret 均不得进入客户端。
 
 安卓下载地址是 `/downloads/ligong-dazi.apk`，版本查询为 `/api/v1/app/version`。应用从桌面启动时记住内置版本号，服务器有更新会在画像页提示下载；系统会要求用户确认安装，不会静默覆盖。网站与 APK 的签名关联文件位于 `/.well-known/assetlinks.json`。源工程在 `android/`，安装包签名密钥 `android/android.keystore` 不会上传 GitHub，密码保存在当前 Mac 钥匙串 `ligong-dazi-android-signing`；两者缺一都无法为已安装用户发布可覆盖更新，请单独、安全备份。没有 Android 真机时，自动测试只能核验构建与签名，实际通知权限及安装升级仍需设备验收。
 

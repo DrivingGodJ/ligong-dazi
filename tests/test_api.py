@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -166,6 +167,7 @@ async def test_separate_native_app_download_and_version(client: httpx.AsyncClien
     apk = await client.get("/downloads/ligong-dazi-native.apk")
     assert apk.status_code == 200
     assert apk.content.startswith(b"PK")
+    assert version.json()["sha256"] == hashlib.sha256(apk.content).hexdigest()
     assert apk.headers["content-type"] == "application/vnd.android.package-archive"
 
 

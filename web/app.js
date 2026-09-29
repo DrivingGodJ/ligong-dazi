@@ -1889,7 +1889,7 @@ async function checkAndroidRelease() {
       updateLink.href = release.download_url;
       updateLink.classList.remove("is-hidden");
       updateLink.textContent = `更新至 ${release.version_name}`;
-      if (sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
+      if (!IS_NATIVE_ANDROID && sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
         showToast("安卓应用有新版本，到我的画像下载更新");
         sessionStorage.setItem("dazi_android_notice", String(release.version_code));
       }

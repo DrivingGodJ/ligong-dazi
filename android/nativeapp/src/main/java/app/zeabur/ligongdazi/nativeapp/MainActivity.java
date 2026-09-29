@@ -90,6 +90,8 @@ public class MainActivity extends Activity {
     private Uri cameraUri;
     private boolean pageFailed;
     private String pendingPushToken;
+    private NativeUpdateManager updateManager;
+    private boolean wasOnline;
 
     private boolean isOurSite(Uri uri) {
         return "https".equalsIgnoreCase(uri.getScheme()) && HOST.equalsIgnoreCase(uri.getHost())
@@ -241,6 +243,7 @@ public class MainActivity extends Activity {
         errorPanel.setVisibility(View.GONE);
         pageFrame.addView(errorPanel, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
+        updateManager = new NativeUpdateManager(this);
 
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -268,6 +271,10 @@ public class MainActivity extends Activity {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
                 Uri uri = request.getUrl();
+                if (isNativeApkLink(uri)) {
+                    updateManager.check(true);
+                    return true;
+                }
                 if (isOurSite(uri)) return false;
                 openOutside(uri);
                 return true;
@@ -340,6 +347,7 @@ public class MainActivity extends Activity {
         webView.setDownloadListener((url, userAgent, disposition, mime, size) -> {
             Uri uri = Uri.parse(url);
             if (!isOurSite(uri)) { openOutside(uri); return; }
+            if (isNativeApkLink(uri)) { updateManager.check(true); return; }
             if (url.endsWith(".apk")) { openOutside(uri); return; }
             try {
                 DownloadManager.Request request = new DownloadManager.Request(uri);
@@ -367,6 +375,10 @@ public class MainActivity extends Activity {
             return "https://" + HOST + relative + separator + "source=android-native&version=" + BuildConfig.VERSION_CODE;
         }
         return START_URL;
+    }
+
+    private boolean isNativeApkLink(Uri uri) {
+        return isOurSite(uri) && "/downloads/ligong-dazi-native.apk".equals(uri.getPath());
     }
 
     private boolean notificationPermissionGranted() {
@@ -483,11 +495,19 @@ public class MainActivity extends Activity {
                 && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
         offlineBanner.setVisibility(online ? View.GONE : View.VISIBLE);
+        if (online && !wasOnline && updateManager != null) updateManager.onNetworkRestored();
+        wasOnline = online;
     }
 
     @Override protected void onResume() {
         super.onResume();
         refreshConnectivity();
+        if (updateManager != null) updateManager.onResume();
+    }
+
+    @Override protected void onPause() {
+        if (updateManager != null) updateManager.onPause();
+        super.onPause();
     }
 
     private void showLoading() {
@@ -623,6 +643,7 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (updateManager != null) updateManager.onDestroy();
         connectionHandler.removeCallbacks(slowConnectionNotice);
         connectionHandler.removeCallbacks(connectionTimeout);
         if (fileCallback != null) fileCallback.onReceiveValue(null);

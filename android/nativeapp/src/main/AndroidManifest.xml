@@ -3,6 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- The push SDK declares broad optional permissions by default. The app does not use
          phone state, location, task inspection or package inventory, so remove them. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" tools:node="remove" />
