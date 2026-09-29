@@ -10,6 +10,7 @@ const gradle = read("android/nativeapp/build.gradle");
 const native = read("android/nativeapp/src/main/java/app/zeabur/ligongdazi/nativeapp/MainActivity.java");
 const app = read("web/app.js");
 const html = read("web/index.html");
+const manifest = read("android/nativeapp/src/main/AndroidManifest.xml");
 
 test("APK bundles every referenced static UI resource without bundling admin or downloads", () => {
   const bundle = gradle.slice(gradle.indexOf("def bundleWebUi ="), gradle.indexOf("android.sourceSets.main.assets.srcDir(bundleWebUi)"));
@@ -51,4 +52,19 @@ test("native network failure reveals the bundled offline state and keeps login i
   assert.equal(authShown, true);
   assert.equal(classes.has("is-native-offline"), true);
   assert.equal(classes.has("is-hidden"), false);
+});
+
+test("native offline notice stays above every page state and tracks validated connectivity", () => {
+  assert.match(manifest, /android\.permission\.ACCESS_NETWORK_STATE/);
+  assert.match(native, /content\.addView\(offlineBanner,[\s\S]*?content\.addView\(pageFrame,/);
+  for (const panel of ["webView", "loadingPanel", "errorPanel"]) {
+    assert.match(native, new RegExp(`pageFrame\\.addView\\(${panel},`));
+  }
+  assert.match(native, /offlineBanner\.setText\("当前已离线/);
+  assert.match(native, /offlineBanner\.setAccessibilityLiveRegion\(View\.ACCESSIBILITY_LIVE_REGION_POLITE\)/);
+  assert.match(native, /registerDefaultNetworkCallback\(connectivityCallback\)/);
+  assert.match(native, /registerNetworkCallback\(new NetworkRequest\.Builder\(\)\.build\(\), connectivityCallback\)/);
+  assert.match(native, /NET_CAPABILITY_INTERNET[\s\S]*?NET_CAPABILITY_VALIDATED/);
+  assert.match(native, /offlineBanner\.setVisibility\(online \? View\.GONE : View\.VISIBLE\)/);
+  assert.match(native, /unregisterNetworkCallback\(connectivityCallback\)/);
 });

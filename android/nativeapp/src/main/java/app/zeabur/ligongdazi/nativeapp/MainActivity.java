@@ -7,6 +7,10 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
+import android.net.NetworkRequest;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -63,6 +67,9 @@ public class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
     private WebViewAssetLoader bundledAssets;
+    private TextView offlineBanner;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback connectivityCallback;
     private FrameLayout loadingPanel;
     private TextView loadingDetail;
     private LinearLayout errorPanel;
@@ -154,8 +161,29 @@ public class MainActivity extends Activity {
                 return insets;
             });
         }
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        root.addView(content, new FrameLayout.LayoutParams(-1, -1));
+
+        offlineBanner = new TextView(this);
+        offlineBanner.setText("当前已离线 · 页面仍可打开，数据需联网");
+        offlineBanner.setTextSize(14);
+        offlineBanner.setGravity(Gravity.CENTER);
+        offlineBanner.setPadding(dp(16), dp(10), dp(16), dp(10));
+        offlineBanner.setMinHeight(dp(44));
+        offlineBanner.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        boolean nightMode = (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        offlineBanner.setBackgroundColor(nightMode ? Color.rgb(60, 39, 77) : Color.rgb(242, 232, 255));
+        offlineBanner.setTextColor(nightMode ? Color.WHITE : Color.rgb(67, 31, 110));
+        offlineBanner.setVisibility(View.GONE);
+        content.addView(offlineBanner, new LinearLayout.LayoutParams(-1, -2));
+
+        FrameLayout pageFrame = new FrameLayout(this);
+        content.addView(pageFrame, new LinearLayout.LayoutParams(-1, 0, 1));
         webView = new WebView(this);
-        root.addView(webView, new FrameLayout.LayoutParams(-1, -1));
+        pageFrame.addView(webView, new FrameLayout.LayoutParams(-1, -1));
 
         loadingPanel = new FrameLayout(this);
         loadingPanel.setBackgroundColor(Color.rgb(249, 245, 255));
@@ -193,7 +221,7 @@ public class MainActivity extends Activity {
             loadingDetail.setBackgroundColor(Color.rgb(43, 32, 56));
             loadingDetail.setTextColor(Color.rgb(234, 217, 255));
         }
-        root.addView(loadingPanel, new FrameLayout.LayoutParams(-1, -1));
+        pageFrame.addView(loadingPanel, new FrameLayout.LayoutParams(-1, -1));
 
         errorPanel = new LinearLayout(this);
         errorPanel.setOrientation(LinearLayout.VERTICAL);
@@ -211,7 +239,7 @@ public class MainActivity extends Activity {
         retry.setOnClickListener(v -> webView.loadUrl(START_URL));
         errorPanel.addView(retry);
         errorPanel.setVisibility(View.GONE);
-        root.addView(errorPanel, new FrameLayout.LayoutParams(-1, -1));
+        pageFrame.addView(errorPanel, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
 
         WebSettings settings = webView.getSettings();
@@ -407,6 +435,58 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        watchConnectivity();
+    }
+
+    private void watchConnectivity() {
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        refreshConnectivity();
+        if (connectivityManager == null) return;
+        connectivityCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) { queueConnectivityRefresh(); }
+            @Override public void onLost(Network network) { queueConnectivityRefresh(); }
+            @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                queueConnectivityRefresh();
+            }
+        };
+        if (Build.VERSION.SDK_INT >= 24) {
+            connectivityManager.registerDefaultNetworkCallback(connectivityCallback);
+        } else {
+            // Android 6 has no default-network callback; observe changes and query the active network.
+            connectivityManager.registerNetworkCallback(new NetworkRequest.Builder().build(), connectivityCallback);
+        }
+    }
+
+    private void queueConnectivityRefresh() {
+        runOnUiThread(this::refreshConnectivity);
+    }
+
+    @Override protected void onStop() {
+        if (connectivityManager != null && connectivityCallback != null) {
+            connectivityManager.unregisterNetworkCallback(connectivityCallback);
+            connectivityCallback = null;
+        }
+        super.onStop();
+    }
+
+    private void refreshConnectivity() {
+        if (offlineBanner == null) return;
+        Network network = connectivityManager == null ? null : connectivityManager.getActiveNetwork();
+        NetworkCapabilities capabilities = network == null ? null
+                : connectivityManager.getNetworkCapabilities(network);
+        boolean online = capabilities != null
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        offlineBanner.setVisibility(online ? View.GONE : View.VISIBLE);
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        refreshConnectivity();
+    }
+
     private void showLoading() {
         connectionHandler.removeCallbacks(connectionTimeout);
         connectionHandler.postDelayed(connectionTimeout, 20000);
@@ -541,6 +621,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         connectionHandler.removeCallbacks(slowConnectionNotice);
+        connectionHandler.removeCallbacks(connectionTimeout);
         if (fileCallback != null) fileCallback.onReceiveValue(null);
         if (webView != null) {
             ((ViewGroup) webView.getParent()).removeView(webView);
