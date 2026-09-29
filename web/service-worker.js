@@ -1,5 +1,5 @@
-const CACHE = "dazi-shell-v42";
-const SHELL = ["/", "/static/styles.css?v=24", "/static/visual-language.css?v=2", "/static/reference-ui.css?v=13", "/static/app.js?v=36", "/static/brand-flower.svg?v=2", "/static/mascot-bloom.svg", "/static/mascot-square.svg", "/static/mascot-activities.svg", "/static/mascot-invitations.svg", "/static/thinking-flower.svg", "/static/floral-canvas.svg", "/static/floral-canvas-dark.svg", "/static/icon-192.png?v=2", "/static/icon-512.png?v=2", "/static/apple-touch-icon-transparent.png?v=1", "/static/favicon.svg?v=2", "/static/launch-art.html"];
+const CACHE = "dazi-shell-v43";
+const SHELL = ["/", "/static/styles.css?v=25", "/static/visual-language.css?v=2", "/static/reference-ui.css?v=14", "/static/app.js?v=36", "/static/brand-flower.svg?v=2", "/static/mascot-bloom.svg", "/static/mascot-square.svg", "/static/mascot-activities.svg", "/static/mascot-invitations.svg", "/static/thinking-flower.svg", "/static/floral-canvas.svg", "/static/floral-canvas-dark.svg", "/static/icon-192.png?v=2", "/static/icon-512.png?v=2", "/static/apple-touch-icon-transparent.png?v=1", "/static/favicon.svg?v=2", "/static/launch-art.html"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));

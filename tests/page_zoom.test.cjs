@@ -2,39 +2,27 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const vm = require("node:vm");
+const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
+const main = read("web/index.html");
+const admin = read("web/admin.html");
+const launch = read("web/launch-art.html");
+const styles = read("web/styles.css");
+const reference = read("web/reference-ui.css");
+const native = read("android/nativeapp/src/main/java/app/zeabur/ligongdazi/nativeapp/MainActivity.java");
 
-const html = fs.readFileSync(path.join(__dirname, "../web/index.html"), "utf8");
-const zoomScript = html.match(/<script>\s*(\(\(\) => \{\s*\/\/ Safari may ignore touch-action[\s\S]*?\}\)\(\);)\s*<\/script>/)?.[1];
-
-test("page disables touch pinch without clamping browser viewport accessibility settings", () => {
-  assert.match(html, /html, body \{ touch-action: pan-x pan-y; \}/);
-  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1\.0" \/>/);
-  assert.doesNotMatch(html, /user-scalable=no|maximum-scale=1/);
-  assert.ok(zoomScript);
+test("web views allow native pinch zoom without gesture interception", () => {
+  for (const html of [main, admin, launch]) {
+    assert.match(html, /name="viewport"[^>]*width=device-width/);
+    assert.doesNotMatch(html, /user-scalable\s*=\s*no|maximum-scale\s*=\s*1|minimum-scale\s*=\s*1/);
+  }
+  assert.doesNotMatch(main, /touch-action:\s*pan-x\s+pan-y/);
+  assert.doesNotMatch(main, /addEventListener\(["'](?:gesturestart|gesturechange|touchmove)["']/);
+  assert.match(native, /settings\.setBuiltInZoomControls\(true\)/);
+  assert.match(native, /settings\.setDisplayZoomControls\(false\)/);
 });
 
-test("gesture fallback blocks pinch but leaves single-finger scrolling alone", () => {
-  const listeners = new Map();
-  vm.runInNewContext(zoomScript, {
-    document: {addEventListener(type, handler, options) {listeners.set(type, {handler, options});}},
-  });
-  assert.equal(listeners.get("gesturestart").options.passive, false);
-  assert.equal(listeners.get("touchmove").options.passive, false);
-
-  const singleTouch = {touches: [{}], cancelable: true, prevented: false, preventDefault() {this.prevented = true;}};
-  listeners.get("touchmove").handler(singleTouch);
-  assert.equal(singleTouch.prevented, false);
-
-  const twoTouches = {...singleTouch, touches: [{}, {}], prevented: false};
-  listeners.get("touchmove").handler(twoTouches);
-  assert.equal(twoTouches.prevented, true);
-
-  const gesture = {...singleTouch, prevented: false};
-  listeners.get("gesturestart").handler(gesture);
-  assert.equal(gesture.prevented, true);
-
-  const nonCancelable = {...twoTouches, cancelable: false, prevented: false};
-  listeners.get("touchmove").handler(nonCancelable);
-  assert.equal(nonCancelable.prevented, false);
+test("editable fields avoid small type that triggers iOS focus zoom", () => {
+  assert.match(styles, /input:not\(\[type="checkbox"\]\):not\(\[type="radio"\]\):not\(\[type="range"\]\),\s*select,\s*textarea\s*\{\s*font-size: max\(1rem, 16px\);/);
+  assert.doesNotMatch(reference, /#match-form \.two-columns input\s*\{[^}]*font-size:/);
+  assert.match(reference, /@media \(max-width: 660px\)\s*\{\s*#match-form \.form-section\.two-columns:has\(input\[type="datetime-local"\]\)/);
 });

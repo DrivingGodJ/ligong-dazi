@@ -181,6 +181,13 @@ textarea {
   font: inherit;
 }
 
+/* Keep editable controls legible without relying on browser focus zoom. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+select,
+textarea {
+  font-size: max(1rem, 16px);
+}
+
 button,
 a,
 input,

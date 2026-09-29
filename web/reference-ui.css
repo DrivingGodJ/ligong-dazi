@@ -778,7 +778,7 @@ body > .main-nav .nav-button.is-active .nav-face-icon circle:first-child { filte
   #match-form .choice-chip b,
   #match-form .choice-chip b svg { width: 16px; height: 16px; }
   #match-form .two-columns { gap: 0.6rem; }
-  #match-form .two-columns input { font-size: 0.72rem; padding-inline: 0.55rem; }
+  #match-form .two-columns input { padding-inline: 0.55rem; }
 
   #panel-square .page-heading-floral,
   #panel-activities .page-heading-floral { min-height: 260px; }
@@ -931,7 +931,7 @@ input::-webkit-datetime-edit { min-width: 0; padding: 0; }
 .person-symbol, .gender-badge b, .gender-count b { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
 #install-guide-dialog .modal-shell { position: relative; padding-top: 3.5rem; }
 #install-guide-dialog .modal-close { position: absolute; right: 1rem; top: 1rem; }
-@media (max-width: 480px) {
+@media (max-width: 660px) {
   #match-form .form-section.two-columns:has(input[type="datetime-local"]),
   #time-vote-dialog .two-columns { grid-template-columns: minmax(0, 1fr); }
 }
