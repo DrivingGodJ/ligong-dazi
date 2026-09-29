@@ -11,6 +11,8 @@
     <meta name="theme-color" content="#171221" media="(prefers-color-scheme: dark)" />
     <title>理工搭子局</title>
     <style>
+      /* Keep one-finger scrolling while disallowing page pinch zoom where supported. */
+      html, body { touch-action: pan-x pan-y; }
       #launch-screen { position:fixed; inset:0; z-index:10000; background:#f9f5ff; }
       #launch-screen[hidden] { display:none; }
       #launch-screen iframe { width:100%; height:100%; border:0; display:block; pointer-events:none; }
@@ -21,13 +23,24 @@
       body.is-launching > :not(#launch-screen):not(script) { visibility:hidden; }
       @media(prefers-color-scheme:dark) { #launch-screen { background:#17121f; } #launch-status { background:#2b2038f2; color:#ead9ff; } }
     </style>
+    <script>
+      (() => {
+        // Safari may ignore touch-action for page zoom; prevent only multi-touch gestures.
+        document.addEventListener("gesturestart", (event) => {
+          if (event.cancelable) event.preventDefault();
+        }, { passive: false });
+        document.addEventListener("touchmove", (event) => {
+          if (event.touches.length > 1 && event.cancelable) event.preventDefault();
+        }, { passive: false });
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=2" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-transparent.png?v=1" />
     <link rel="stylesheet" href="/static/styles.css?v=24" />
     <link rel="stylesheet" href="/static/visual-language.css?v=2" />
-    <link rel="stylesheet" href="/static/reference-ui.css?v=11" />
-    <script src="/static/app.js?v=34" defer></script>
+    <link rel="stylesheet" href="/static/reference-ui.css?v=13" />
+    <script src="/static/app.js?v=36" defer></script>
   </head>
   <body class="is-launching">
     <div id="launch-screen" aria-label="正在打开理工搭子局">
@@ -94,6 +107,11 @@
         </div>
 
         <div class="auth-card">
+          <div id="native-offline-panel" class="install-guide is-hidden" role="status" aria-live="polite">
+            <strong>界面已保存在应用中</strong>
+            <p>目前无法连接服务，账号和活动数据暂时不可读取。你的登录状态已保留，联网后可以重试。</p>
+            <button id="native-offline-retry" class="button button-primary button-wide" type="button">重新连接</button>
+          </div>
           <div class="segmented-control" role="tablist" aria-label="登录或注册">
             <button
               id="login-tab"
@@ -150,16 +168,31 @@
           </div>
 
           <div id="register-panel" class="is-hidden" role="tabpanel" aria-labelledby="register-tab">
-            <div id="ios-install-guide" class="install-guide is-hidden">
-              <strong>先把搭子局放上 iPhone 桌面</strong>
-              <p>请用 Safari 打开本站，点分享 →「添加到主屏幕」。之后从桌面图标进入并允许通知，才可能收到活动提醒。先注册也可以，消息会留在站内。</p>
+            <div id="registration-install-gate" class="registration-install-gate is-hidden" aria-labelledby="registration-install-title">
+              <img src="/static/brand-flower.svg?v=2" alt="" width="64" height="64" />
+              <p class="registration-install-eyebrow">注册前，先收好搭子局</p>
+              <h2 id="registration-install-title" tabindex="-1">把搭子局放到桌面</h2>
+              <p class="registration-install-intro">以后找搭子、看邀请更方便。完成安装或添加到主屏幕后，再从桌面打开并注册。</p>
+              <div id="ios-install-guide" class="install-guide is-hidden">
+                <strong>iPhone / iPad：添加到主屏幕</strong>
+                <ol>
+                  <li>用 Safari 打开当前网页。</li>
+                  <li>点「分享」→「添加到主屏幕」。</li>
+                  <li>从桌面图标打开搭子局，再注册。</li>
+                </ol>
+                <p>要接收系统通知，还需在桌面版的「我的画像」中开启并允许通知。</p>
+              </div>
+              <div id="android-install-guide" class="install-guide is-hidden">
+                <strong>安卓：安装搭子局应用</strong>
+                <p>下载并安装官方 APK，再从桌面图标打开搭子局注册。安装时系统可能要求你确认。</p>
+                <a id="android-download-link" class="button button-primary button-wide is-hidden" href="/downloads/ligong-dazi-native.apk">下载安卓 APK</a>
+                <p id="android-download-status" class="registration-download-status" role="status" aria-live="polite">正在检查安装包…</p>
+                <p>要接收系统通知，还需在应用的「我的画像」中开启并允许通知。</p>
+              </div>
+              <button id="continue-web-registration" class="button button-quiet registration-web-button" type="button">暂不安装，继续网页注册</button>
+              <p class="registration-web-note">网页注册也能正常使用，邀请和活动消息会保留在站内。</p>
             </div>
-            <div id="android-install-guide" class="install-guide is-hidden">
-              <strong>安卓可以安装搭子局</strong>
-              <p>推荐安装官方 APK，登录后在「我的画像」打开通知。安装更新时系统会请你确认。</p>
-              <a id="android-download-link" class="button button-quiet is-hidden" href="/downloads/ligong-dazi.apk">下载安卓 APK</a>
-            </div>
-            <form id="register-form" class="form-stack">
+            <form id="register-form" class="form-stack is-hidden">
               <div class="onboarding-progress" aria-label="注册进度">
                 <span class="is-active" data-register-dot="account"><b>1</b>账号</span>
                 <i aria-hidden="true"></i>

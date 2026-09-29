@@ -21,10 +21,13 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.webkit.DownloadListener;
 import android.webkit.JavascriptInterface;
+import android.webkit.ServiceWorkerClient;
+import android.webkit.ServiceWorkerController;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -38,16 +41,20 @@ import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
 import androidx.core.content.ContextCompat;
+import androidx.webkit.WebViewAssetLoader;
 
 import com.igexin.sdk.PushManager;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 
-/** A standalone Android window for the live site; never launches the site in a browser. */
+/** A standalone Android window with bundled UI and live data from our HTTPS API. */
 public class MainActivity extends Activity {
     public static final String EXTRA_OPEN_URL = "dazi_open_url";
     private static final String HOST = "ligong-dazi.zeabur.app";
@@ -55,13 +62,14 @@ public class MainActivity extends Activity {
     private static final int PICK_PHOTO = 10;
     private static final int NOTIFICATION_PERMISSION = 11;
     private WebView webView;
+    private WebViewAssetLoader bundledAssets;
     private FrameLayout loadingPanel;
     private TextView loadingDetail;
     private LinearLayout errorPanel;
     private final Handler connectionHandler = new Handler(Looper.getMainLooper());
     private final Runnable slowConnectionNotice = () -> {
         if (loadingPanel != null && loadingPanel.getVisibility() == View.VISIBLE) {
-            loadingDetail.setText("服务器响应有点慢，正在继续连接…");
+            loadingDetail.setText("界面加载有点慢，正在继续打开…");
         }
     };
     private ValueCallback<Uri[]> fileCallback;
@@ -81,11 +89,62 @@ public class MainActivity extends Activity {
                 && (uri.getPort() == -1 || uri.getPort() == 443);
     }
 
+    private WebResourceResponse missingBundledResource() {
+        WebResourceResponse response = new WebResourceResponse("text/plain", "UTF-8",
+                new ByteArrayInputStream("安装包缺少页面资源".getBytes(StandardCharsets.UTF_8)));
+        response.setStatusCodeAndReasonPhrase(404, "Not Found");
+        return response;
+    }
+
+    private WebResourceResponse bundledResource(String fileName, String mimeType) {
+        try {
+            WebResourceResponse response = new WebResourceResponse(mimeType, "UTF-8",
+                    getAssets().open(fileName));
+            response.setResponseHeaders(Collections.singletonMap("Cache-Control", "no-store"));
+            return response;
+        } catch (IOException error) {
+            return missingBundledResource();
+        }
+    }
+
+    /** Never fall through to the website for a missing UI file; only data paths use the network. */
+    private WebResourceResponse interceptBundledUi(Uri uri, String method) {
+        if (!"GET".equalsIgnoreCase(method) || !isOurSite(uri)) return null;
+        String path = uri.getPath();
+        if ("/".equals(path) || "/index.html".equals(path)) {
+            return bundledResource("index.html", "text/html");
+        }
+        if ("/manifest.webmanifest".equals(path)) {
+            return bundledResource("manifest.webmanifest", "application/manifest+json");
+        }
+        if ("/service-worker.js".equals(path)) {
+            return bundledResource("service-worker.js", "application/javascript");
+        }
+        if (path != null && path.startsWith("/static/")) {
+            WebResourceResponse response = bundledAssets.shouldInterceptRequest(uri);
+            return response == null ? missingBundledResource() : response;
+        }
+        return null;
+    }
+
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         PushManager.getInstance().preInit(getApplicationContext());
         getWindow().setStatusBarColor(Color.rgb(20, 17, 27));
         getWindow().setNavigationBarColor(Color.rgb(20, 17, 27));
+
+        bundledAssets = new WebViewAssetLoader.Builder()
+                .setDomain(HOST)
+                .addPathHandler("/static/", new WebViewAssetLoader.AssetsPathHandler(this))
+                .build();
+        // Previous app versions registered the site's worker. Route its fetches to the APK too.
+        if (Build.VERSION.SDK_INT >= 24) {
+            ServiceWorkerController.getInstance().setServiceWorkerClient(new ServiceWorkerClient() {
+                @Override public WebResourceResponse shouldInterceptRequest(WebResourceRequest request) {
+                    return interceptBundledUi(request.getUrl(), request.getMethod());
+                }
+            });
+        }
 
         FrameLayout root = new FrameLayout(this);
         if (Build.VERSION.SDK_INT >= 35) {
@@ -142,7 +201,7 @@ public class MainActivity extends Activity {
         errorPanel.setPadding(dp(32), dp(40), dp(32), dp(40));
         errorPanel.setBackgroundColor(Color.rgb(20, 17, 27));
         TextView message = new TextView(this);
-        message.setText("暂时连不上搭子局\n检查网络后再试一次");
+        message.setText("暂时无法打开搭子局\n请重新打开或检查网络");
         message.setTextColor(Color.WHITE);
         message.setTextSize(19);
         message.setGravity(Gravity.CENTER);
@@ -165,11 +224,16 @@ public class MainActivity extends Activity {
         settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setMediaPlaybackRequiresUserGesture(true);
-        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/6");
+        settings.setUserAgentString(settings.getUserAgentString() + " LigongDaziNative/" + BuildConfig.VERSION_CODE);
         webView.addJavascriptInterface(new CalendarBridge(), "LigongCalendar");
         webView.addJavascriptInterface(new PushBridge(), "LigongPush");
 
         webView.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view,
+                    WebResourceRequest request) {
+                return interceptBundledUi(request.getUrl(), request.getMethod());
+            }
+
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (!request.isForMainFrame()) return false;
                 Uri uri = request.getUrl();
@@ -347,7 +411,7 @@ public class MainActivity extends Activity {
         connectionHandler.removeCallbacks(connectionTimeout);
         connectionHandler.postDelayed(connectionTimeout, 20000);
         connectionHandler.removeCallbacks(slowConnectionNotice);
-        loadingDetail.setText("正在加载最新内容，请稍候…");
+        loadingDetail.setText("正在打开搭子局…");
         errorPanel.setVisibility(View.GONE);
         loadingPanel.setVisibility(View.VISIBLE);
         connectionHandler.postDelayed(slowConnectionNotice, 8000);

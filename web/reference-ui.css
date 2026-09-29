@@ -37,6 +37,43 @@ body::before { display: none; }
 .auth-brand-lockup strong { font-size: 1.45rem; font-weight: 900; letter-spacing: -0.04em; }
 .auth-brand-lockup span { color: #8a7fa1; font-size: 0.84rem; font-weight: 650; }
 
+.registration-install-gate {
+  display: grid;
+  gap: 0.85rem;
+  justify-items: stretch;
+  padding: 0.2rem 0 0.4rem;
+  text-align: center;
+}
+.registration-install-gate > img { justify-self: center; width: 64px; height: 64px; filter: drop-shadow(0 8px 18px rgb(101 62 174 / 14%)); }
+.registration-install-gate > h2 { margin: 0; color: var(--ink-950); font-size: clamp(1.3rem, 5vw, 1.65rem); line-height: 1.25; }
+.registration-install-gate > h2:focus-visible { outline: 2px solid var(--brand-600); outline-offset: 5px; border-radius: 6px; }
+.registration-install-eyebrow { margin: 0; color: var(--brand-700); font-size: 0.82rem; font-weight: 800; }
+.registration-install-intro, .registration-web-note { margin: 0; color: var(--ink-600); font-size: 0.86rem; line-height: 1.55; }
+.registration-install-gate .install-guide { margin: 0.15rem 0 0; padding: 1rem; text-align: left; background: var(--brand-50); border-color: var(--ref-border); }
+.registration-install-gate .install-guide strong { color: var(--ink-950); }
+.registration-install-gate .install-guide p, .registration-install-gate .install-guide li { color: var(--ink-700); font-size: 0.84rem; line-height: 1.55; }
+.registration-install-gate .install-guide p { margin: 0.55rem 0 0; }
+.registration-install-gate .install-guide ol { margin: 0.6rem 0 0; padding-left: 1.3rem; }
+.registration-install-gate #android-download-link { margin-top: 0.9rem; }
+.registration-download-status { font-size: 0.8rem; }
+.registration-install-gate .registration-web-button {
+  justify-self: center;
+  width: auto;
+  min-height: 44px;
+  padding: 0.6rem 1rem;
+  color: #5529a0;
+  background: #f3edff;
+  border-color: #dfd0f8;
+  box-shadow: none;
+  font-size: 0.82rem;
+}
+.registration-install-gate .registration-web-button:hover { background: #e9ddff; }
+.auth-shell.is-native-offline .segmented-control,
+.auth-shell.is-native-offline #login-panel,
+.auth-shell.is-native-offline #register-panel { display: none; }
+#native-offline-panel { margin: 0; }
+#native-offline-panel .button { margin-top: 0.8rem; }
+
 body.has-app {
   padding-bottom: calc(var(--ref-nav-height) + 24px + env(safe-area-inset-bottom));
   background-color: #faf8ff;
@@ -544,6 +581,10 @@ body.is-agent-searching > .main-nav { pointer-events: none; }
 .push-preference[aria-busy="true"] { cursor: progress; }
 .push-preference input:disabled + span { opacity: 0.65; }
 @media (prefers-color-scheme: dark) {
+  #native-offline-panel { color: #e9dcf5; background: #30263d; border-color: #69547e; }
+  .registration-install-gate .install-guide { background: #30263d; border-color: #69547e; }
+  .registration-install-gate .registration-web-button { color: #eadcff; background: #443451; border-color: #82649a; }
+  .registration-install-gate .registration-web-button:hover { background: #554067; }
   #push-preference-value { color: #d8baff; }
 }
 

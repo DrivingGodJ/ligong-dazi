@@ -14,8 +14,8 @@ android {
         applicationId 'app.zeabur.ligongdazi.nativeapp'
         minSdkVersion 23
         targetSdkVersion 35
-        versionCode 7
-        versionName "1.6-beta"
+        versionCode 8
+        versionName "1.7-beta"
         manifestPlaceholders = [GETUI_APPID: "S4Lc1ylHbS8bCbKAAxkaD3"]
     }
 
@@ -32,6 +32,24 @@ android {
 
 dependencies {
     implementation 'androidx.core:core:1.13.1'
+    // 1.15 is the last stable release supporting this app's minSdk 23.
+    implementation 'androidx.webkit:webkit:1.15.0'
     implementation 'com.getui:gtsdk:3.3.16.0'
     implementation 'com.getui:gtc:3.3.3.0'
 }
+
+def bundleWebUi = tasks.register('bundleWebUi', Sync) {
+    from(rootProject.file('../web')) {
+        include 'index.html', 'app.js', 'styles.css', 'visual-language.css',
+                'reference-ui.css', 'manifest.webmanifest', 'service-worker.js',
+                'launch-art.html', 'brand-flower.svg', 'mascot-bloom.svg',
+                'mascot-square.svg', 'mascot-activities.svg', 'mascot-invitations.svg',
+                'thinking-flower.svg', 'floral-canvas.svg', 'floral-canvas-dark.svg',
+                'favicon.svg', 'icon-192.png', 'icon-512.png',
+                'apple-touch-icon-transparent.png'
+    }
+    into(layout.buildDirectory.dir('generated/bundled-web'))
+}
+
+// Pass the producing task itself so Gradle infers the dependency for packaging and lint.
+android.sourceSets.main.assets.srcDir(bundleWebUi)

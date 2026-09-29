@@ -314,11 +314,26 @@ function switchAuthPanel(panel) {
   elements.authAppealButton.classList.add("is-hidden");
   if (!loginActive) {
     showRegisterStep("account");
-    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const android = /Android/i.test(navigator.userAgent);
-    document.querySelector("#ios-install-guide").classList.toggle("is-hidden", !ios || window.matchMedia("(display-mode: standalone)").matches);
-    document.querySelector("#android-install-guide").classList.toggle("is-hidden", !android || IS_NATIVE_ANDROID);
+    const platform = registrationInstallPlatform();
+    document.querySelector("#registration-install-gate").classList.toggle("is-hidden", !platform);
+    elements.registerForm.classList.toggle("is-hidden", Boolean(platform));
+    document.querySelector("#ios-install-guide").classList.toggle("is-hidden", platform !== "ios");
+    document.querySelector("#android-install-guide").classList.toggle("is-hidden", platform !== "android");
+    if (platform) document.querySelector("#registration-install-title").focus({preventScroll: true});
   }
+}
+
+function registrationInstallPlatform() {
+  if (isInstalledApp()) return null;
+  if (isIos()) return "ios";
+  if (/Android/i.test(navigator.userAgent)) return "android";
+  return null;
+}
+
+function continueWebRegistration() {
+  document.querySelector("#registration-install-gate").classList.add("is-hidden");
+  elements.registerForm.classList.remove("is-hidden");
+  elements.registerForm.elements.display_name.focus();
 }
 
 function showRegisterStep(step) {
@@ -375,6 +390,12 @@ function showAuthShell() {
   elements.appView.classList.add("is-hidden");
   elements.mainNav.classList.add("is-hidden");
   elements.accountArea.classList.add("is-hidden");
+}
+
+function showNativeOfflineState() {
+  showAuthShell();
+  elements.authView.classList.add("is-native-offline");
+  document.querySelector("#native-offline-panel").classList.remove("is-hidden");
 }
 
 async function logout(showMessage = true) {
@@ -1837,16 +1858,28 @@ async function setPushEnabled(enabled) {
 async function checkAndroidRelease() {
   refreshInstallHint();
   if (!/Android/i.test(navigator.userAgent)) return;
+  if (!IS_NATIVE_ANDROID && !isInstalledApp()) {
+    const downloadLink = document.querySelector("#android-download-link");
+    const downloadStatus = document.querySelector("#android-download-status");
+    try {
+      const response = await fetch("/api/v1/app/native-version", {cache: "no-store"});
+      if (!response.ok) throw new Error("安装包查询失败");
+      const release = await response.json();
+      if (!release.available) throw new Error("安装包暂不可用");
+      downloadLink.href = release.download_url;
+      downloadLink.classList.remove("is-hidden");
+      downloadStatus.classList.add("is-hidden");
+    } catch {
+      downloadLink.classList.add("is-hidden");
+      downloadStatus.textContent = "安装包暂不可用，可先继续网页注册。";
+      downloadStatus.classList.remove("is-hidden");
+    }
+  }
   try {
     const response = await fetch(IS_NATIVE_ANDROID ? "/api/v1/app/native-version" : "/api/v1/app/version", {cache: "no-store"});
     if (!response.ok) return;
     const release = await response.json();
     if (!release.available) return;
-    document.querySelectorAll(IS_NATIVE_ANDROID ? "#profile-apk-update" : "#android-download-link").forEach((link) => {
-      link.href = release.download_url;
-      link.classList.toggle("is-hidden", isInstalledApp());
-      if (IS_NATIVE_ANDROID) link.textContent = "查看应用版安装包";
-    });
     const installedVersion = IS_NATIVE_ANDROID
       ? Number(navigator.userAgent.match(/LigongDaziNative\/(\d+)/)?.[1] || 0)
       : Number(localStorage.getItem("dazi_android_app_version") || 0);
@@ -2688,6 +2721,8 @@ function bindEvents() {
   }
   document.querySelector("#login-tab").addEventListener("click", () => switchAuthPanel("login"));
   document.querySelector("#register-tab").addEventListener("click", () => switchAuthPanel("register"));
+  document.querySelector("#continue-web-registration").addEventListener("click", continueWebRegistration);
+  document.querySelector("#native-offline-retry").addEventListener("click", () => window.location.reload());
   elements.loginForm.addEventListener("submit", handleLogin);
   elements.registerForm.addEventListener("submit", handleRegister);
   document.querySelector("#forgot-password-button").addEventListener("click", openPasswordReset);
@@ -2972,7 +3007,14 @@ async function initialize() {
   bindEvents();
   document.querySelector("#install-guide-button").addEventListener("click", () => document.querySelector("#install-guide-dialog").showModal());
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+    if (IS_NATIVE_ANDROID) {
+      // The APK supplies the UI. Remove older web-shell workers without clearing login data.
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((item) => item.unregister())))
+        .catch(() => {});
+    } else {
+      navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+    }
   }
   const launch = new URLSearchParams(window.location.search);
   if (["android-app", "android-native"].includes(launch.get("source")) && /^\d+$/.test(launch.get("version") || "")) {
@@ -2984,7 +3026,8 @@ async function initialize() {
   setResultView("empty");
   loadAgentMode();
   if (!state.token) {
-    showAuthShell();
+    if (IS_NATIVE_ANDROID && !navigator.onLine) showNativeOfflineState();
+    else showAuthShell();
     return;
   }
   try {
@@ -2999,6 +3042,7 @@ async function initialize() {
     else if (!["南京", "江阴"].includes(state.user.campus) || !state.user.student_id) switchTab("profile");
   } catch (error) {
     if (error.status === 401) logout(false);
+    else if (IS_NATIVE_ANDROID && (error instanceof TypeError || error.status >= 500)) showNativeOfflineState();
     else throw error;
   }
 }

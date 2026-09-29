@@ -36,7 +36,7 @@ jobs:
         run: |
           node --check web/app.js
           node --check web/admin.js
-          node --test tests/push_controls.test.cjs
+          node --test tests/*.test.cjs
 
       - name: 检查上线镜像可以构建
         run: docker build --tag ligong-dazi-ci .

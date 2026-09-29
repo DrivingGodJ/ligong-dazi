@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -155,9 +157,11 @@ async def test_college_choices_and_unknown_legacy_department_uses_default(
 
 async def test_separate_native_app_download_and_version(client: httpx.AsyncClient) -> None:
     version = await client.get("/api/v1/app/native-version")
+    release_path = Path(__file__).parent.parent / "web/android-native-release.json"
+    release = json.loads(release_path.read_text(encoding="utf-8"))
     assert version.status_code == 200
-    assert version.json()["version_code"] == 7
-    assert version.json()["version_name"] == "1.6-beta"
+    assert version.json()["version_code"] == release["version_code"]
+    assert version.json()["version_name"] == release["version_name"]
     assert version.json()["download_url"] == "/downloads/ligong-dazi-native.apk"
     apk = await client.get("/downloads/ligong-dazi-native.apk")
     assert apk.status_code == 200

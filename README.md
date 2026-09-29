@@ -25,7 +25,7 @@
 - 活动可设置自由加入或申请入局；后者需现有成员全部同意，成员可先查看申请人的档案
 - 顶部保留名称与消息入口，主导航固定在屏幕底部并适配手机安全区域
 - 站内通知与自愿授权的手机推送：邀请、开始前 15 分钟、入局申请、公开活动新成员、改期提案
-- iPhone 注册页提示从 Safari 添加到主屏幕后授权通知；安卓提供带签名的应用包下载及版本提示（安装更新需用户确认）
+- 安卓或 iPhone / iPad 用户在浏览器点击注册时，先看到下载官方 APK 或通过 Safari 添加到主屏幕的引导；点击浅色的「暂不安装，继续网页注册」后才出现注册表单。已从应用、主屏幕或电脑浏览器打开时直接进入注册。完成安装仍需在应用内主动开启并允许系统通知，站内消息一直可用
 - 活动创建、查询、参与者和容量管理
 - `personal_requirement` 自然语言个性化需求
 - 匹配 Agent：查询已有活动、查询无时间冲突用户、计算匹配度
@@ -125,17 +125,17 @@ uv run python -m scripts.seed_demo
 
 ## 手机通知和安卓安装包
 
-手机弹窗是可选功能，拒绝系统权限时仍能在右上角铃铛查看所有消息。iPhone 须从 Safari 添加到主屏幕并从桌面图标打开，点「打开手机通知」授权；普通浏览器标签页无法代替这一流程。安卓 APK 使用 Trusted Web Activity 包装同一网站，安装后登录并主动授权。Web Push 密钥存放在持久存储 `DAZI_PUSH_KEY_FILE_PATH`（Zeabur 默认 `/app/data/vapid_private.pem`），不要删掉或重建，否则旧设备的订阅会失效。
+手机弹窗是可选功能，拒绝系统权限时仍能在右上角铃铛查看所有消息。iPhone 须从 Safari 添加到主屏幕并从桌面图标打开，点「打开手机通知」授权；普通浏览器标签页无法代替这一流程。旧版 TWA 安装包 `/downloads/ligong-dazi.apk` 仍包装线上网站，安装后登录并主动授权。Web Push 密钥存放在持久存储 `DAZI_PUSH_KEY_FILE_PATH`（Zeabur 默认 `/app/data/vapid_private.pem`），不要删掉或重建，否则旧设备的订阅会失效。
 
-另有一个可并排安装的独立窗口应用版：`/downloads/ligong-dazi-native.apk`。它用 Android WebView 在应用里打开相同的线上站点，不再启动外部浏览器；首次连接和页面重载会显示加载状态，服务器响应超过 8 秒时会继续说明正在连接，失败后可直接重试。照片可从相册或相机选择，日历文件会交给系统应用打开。它的包名独立，登录状态不会从旧版或浏览器自动迁移，需要重新登录。
+推荐安装的独立应用版是 `/downloads/ligong-dazi-native.apk`。从 `1.7-beta` 起，构建 APK 时将首页、脚本、样式、插画和开屏画面直接打进安装包；WebView 以原 HTTPS 域名从包内读取这些资源，`/api/v1`、`/health/ready`、下载等数据请求仍到服务器。断网时界面可打开并显示重试提示，但账号、活动等私人数据不作离线缓存，联网后才能读取和提交。应用内界面的更新今后必须重新打包发布 APK，网页更新不会自动替换包内界面。照片可从相册或相机选择，日历文件会交给系统应用打开。它的包名独立，登录状态不会从旧版或浏览器自动迁移，需要重新登录。
 
-应用版 `1.6-beta` 使用个推原生通知，并支持在画像设置中关闭和重新开启本设备推送。用户须在画像页主动打开，Android 13 及以上还会显示系统权限确认；本机推送标识随后绑定到当前账号，退出登录时解绑。服务器需要私密配置 `DAZI_GETUI_APP_ID`、`DAZI_GETUI_APP_KEY` 和 `DAZI_GETUI_MASTER_SECRET`，后两项绝不能写进 APK 或仓库。当前只接入个推基础通道，没有配置小米、华为、OPPO、vivo 等厂商离线通道，因此应用被系统彻底结束后的送达率会受手机后台策略影响。尚未经过安卓真机收发验收，不要把构建通过等同于可靠送达。
+应用版 `1.7-beta` 使用个推原生通知，并支持在画像设置中关闭和重新开启本设备推送。用户须在画像页主动打开，Android 13 及以上还会显示系统权限确认；本机推送标识随后绑定到当前账号，退出登录时解绑。服务器需要私密配置 `DAZI_GETUI_APP_ID`、`DAZI_GETUI_APP_KEY` 和 `DAZI_GETUI_MASTER_SECRET`，后两项绝不能写进 APK 或仓库。当前只接入个推基础通道，没有配置小米、华为、OPPO、vivo 等厂商离线通道，因此应用被系统彻底结束后的送达率会受手机后台策略影响。尚未经过安卓真机收发验收，不要把构建通过等同于可靠送达。
 
-应用版工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成原签名 APK；版本号同步写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL，接口 `/api/v1/app/native-version` 提供版本信息。安装包内只允许出现公开 App ID，App Key、App Secret 和 Master Secret 均不得进入客户端。
+应用版工程位于 `android/nativeapp/`，用 `bash scripts/build_android_native.sh` 生成原签名 APK；构建会从 `web/` 复制允许的 UI 文件，不包含管理页、用户数据、服务器密钥或其他 APK。版本号同步写入 `web/android-native-release.json`、`android/nativeapp/build.gradle` 和启动 URL，接口 `/api/v1/app/native-version` 提供版本信息。安装包内只允许出现公开 App ID，App Key、App Secret 和 Master Secret 均不得进入客户端。
 
 安卓下载地址是 `/downloads/ligong-dazi.apk`，版本查询为 `/api/v1/app/version`。应用从桌面启动时记住内置版本号，服务器有更新会在画像页提示下载；系统会要求用户确认安装，不会静默覆盖。网站与 APK 的签名关联文件位于 `/.well-known/assetlinks.json`。源工程在 `android/`，安装包签名密钥 `android/android.keystore` 不会上传 GitHub，密码保存在当前 Mac 钥匙串 `ligong-dazi-android-signing`；两者缺一都无法为已安装用户发布可覆盖更新，请单独、安全备份。没有 Android 真机时，自动测试只能核验构建与签名，实际通知权限及安装升级仍需设备验收。
 
-以后更新安卓外壳：把 `android/twa-manifest.json` 的 `appVersionCode`、`appVersionName` 和启动链接里的 `version` 一起提高，并同步 `android/app/build.gradle` 与 `web/android-release.json`；在原签名密钥仍在这台 Mac 上的前提下运行 `bash scripts/build_android.sh`，确认签名指纹与 `web/assetlinks.json` 一致，再提交新 APK。普通网页改动不必重新打包，线上网站更新后 APK 会读取新网页。
+以后更新旧版 TWA 外壳：把 `android/twa-manifest.json` 的 `appVersionCode`、`appVersionName` 和启动链接里的 `version` 一起提高，并同步 `android/app/build.gradle` 与 `web/android-release.json`；在原签名密钥仍在这台 Mac 上的前提下运行 `bash scripts/build_android.sh`，确认签名指纹与 `web/assetlinks.json` 一致，再提交新 APK。TWA 仍会读取线上网页；独立应用版改动则需要提高 `android/nativeapp/build.gradle` 与 `web/android-native-release.json` 的版本并重新构建、签名。
 
 建议先用“小曾”体验已经结束的“昨晚南区羽毛球”，可以直接打开评价弹窗；将到场情况选为“没有出现”并提交高影响评价后，切换“小李”即可看到第三人复核任务。也可以发起一次新匹配并邀请“小王”，再切换账号接受邀请。
 
