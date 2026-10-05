@@ -29,10 +29,15 @@
   --ink-700: #594c66;
   --ink-600: #70657b;
   --ink-500: #8b8195;
-  --surface: #fffefe;
-  --surface-soft: #fbf9ff;
-  --canvas: #f7f3ff;
-  --line: #e8e0f0;
+  --surface: #fffefd;
+  --surface-soft: #fbf9fc;
+  --canvas: #faf8fc;
+  --line: #ede6f3;
+  --title-ink: #43276a;
+  --title-weight: 600;
+  --title-tracking: .045em;
+  --accent-soft: #fff3ce;
+  --accent-ink: #725014;
   --line-strong: #d6c9e5;
   --success-700: #26714f;
   --success-100: #e5f6ec;
@@ -40,7 +45,7 @@
   --warning-100: #fff4d5;
   --danger-700: #a8324d;
   --danger-100: #ffe8ee;
-  --shadow-small: 0 10px 26px rgb(63 35 96 / 8%);
+  --shadow-small: 0 10px 28px rgb(68 40 96 / 7%);
   --shadow-large: 0 26px 68px rgb(63 35 96 / 14%);
   --shadow-float: 0 16px 34px rgb(92 48 168 / 18%);
   --radius-small: 14px;
@@ -223,10 +228,11 @@ main {
 
 .auth-intro h1 {
   max-width: 9.2em;
-  color: var(--brand-950);
-  font-size: clamp(2.55rem, 5vw, 4.5rem);
-  font-weight: 900;
-  letter-spacing: -0.065em;
+  color: var(--title-ink);
+  font-size: clamp(2.35rem, 4.6vw, 4.14rem);
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
+  line-height: 1.25;
   text-wrap: balance;
 }
 
@@ -607,8 +613,9 @@ textarea::placeholder {
 .running-state h2,
 .success-state h2,
 .result-header h2 {
-  color: var(--brand-950);
-  font-weight: 900;
+  color: var(--title-ink);
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
 }
 
 .agent-orbit {
@@ -698,7 +705,7 @@ textarea::placeholder {
 }
 
 .candidate-card.is-selected {
-  background: linear-gradient(145deg, #fff, #f6f0ff);
+  background: var(--surface);
   border-color: var(--brand-500);
   box-shadow: 0 14px 30px rgb(112 64 213 / 15%);
 }
@@ -742,8 +749,9 @@ textarea::placeholder {
 
 .square-card h2,
 .activity-card h2 {
-  color: var(--brand-950);
-  font-weight: 850;
+  color: var(--title-ink);
+  font-weight: var(--title-weight);
+  letter-spacing: .03em;
 }
 
 .activity-date-tile {
@@ -769,7 +777,7 @@ textarea::placeholder {
 }
 
 .activity-update {
-  background: linear-gradient(145deg, #f6efff, #fff);
+  background: var(--surface);
   border-color: #d5c1ed;
   border-radius: 18px;
 }
@@ -1372,6 +1380,9 @@ body > .main-nav .nav-badge {
     --surface: #241e2c;
     --surface-soft: #2b2434;
     --canvas: #17121f;
+    --title-ink: #eee2ff;
+    --accent-soft: #403622;
+    --accent-ink: #ead6a0;
     --line: #44394e;
     --line-strong: #5c4e69;
     --success-700: #91dfb4;
@@ -1504,12 +1515,12 @@ body > .main-nav .nav-badge {
   }
 
   .activity-update {
-    background: linear-gradient(145deg, #30243f, #241e2c);
+    background: var(--surface);
     border-color: #5c4776;
   }
 
   .candidate-card.is-selected {
-    background: linear-gradient(145deg, #2f253c, #392a4c);
+    background: var(--surface);
   }
 
   .activity-card.needs-review {
@@ -1537,3 +1548,84 @@ body > .main-nav .nav-badge {
     transform: none;
   }
 }
+
+/* Shared polish: keep the existing layout, copy, artwork, credit and purple CTA. */
+.auth-intro h1,
+.admin-login h1,
+.admin-hero h1 {
+  color: var(--title-ink);
+  font-weight: var(--title-weight);
+  letter-spacing: var(--title-tracking);
+  line-height: 1.25;
+  margin-top: 1rem;
+}
+.admin-login h1 { font-size: clamp(1.84rem, 4.6vw, 3.22rem); }
+.admin-hero h1 { font-size: clamp(1.84rem, 4.416vw, 3.68rem); }
+.auth-intro > .eyebrow,
+.registration-install-eyebrow,
+.admin-login .eyebrow,
+.admin-hero .eyebrow,
+.section-heading .eyebrow,
+.modal-shell > .eyebrow,
+.result-header .eyebrow,
+.success-state > .eyebrow {
+  display: inline-block;
+  justify-self: start;
+  width: fit-content;
+  padding: .25rem .55rem;
+  margin-bottom: .1rem;
+  border-radius: 10px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-weight: 600;
+  letter-spacing: .045em;
+  line-height: 1.5;
+}
+.tab-panel h2,
+.tab-panel h3,
+.modal-shell h2,
+.modal-shell h3,
+.registration-install-gate > h2,
+.section-heading h2,
+.admin-section h3 {
+  color: var(--title-ink);
+  font-weight: var(--title-weight);
+  letter-spacing: .03em;
+  line-height: 1.4;
+}
+.empty-list-playful strong { font-weight: 600; line-height: 1.5; }
+.registration-install-gate .registration-install-eyebrow { justify-self: center; }
+.register-step-heading strong { color: var(--title-ink); font-weight: 600; letter-spacing: .03em; line-height: 1.4; }
+.register-step-heading,
+.onboarding-skill,
+.system-profile-section { background: var(--surface-soft); border-color: var(--line); }
+.profile-dialog-hero .profile-identity-row h2 { margin-top: 0; }
+.auth-card,
+.request-panel,
+.result-panel,
+.list-surface,
+.square-filters,
+.applications-section,
+.peer-review-section,
+.modal-card {
+  background: var(--surface);
+  border-color: var(--line);
+  box-shadow: var(--shadow-small);
+}
+.modal-shell { background: var(--surface); }
+.modal-card { box-shadow: var(--shadow-large); }
+.segmented-control,
+.activity-filters,
+.admin-nav { background: var(--surface-soft); border-color: var(--line); }
+.auth-steps li { background: var(--surface); border-color: var(--line); }
+.auth-steps span { color: var(--brand-800); background: var(--accent-soft); box-shadow: none; }
+.modal-close,
+.skill-remove { background: var(--surface-soft); }
+.result-header h2 { margin-top: 1rem; }
+.modal-shell > h2 { margin-top: .15rem; font-size: clamp(1.334rem, 3.68vw, 1.84rem); }
+.registration-install-gate > h2 { font-size: clamp(1.2rem, 4.6vw, 1.52rem); }
+.section-heading h2 { margin-top: .75rem; }
+.section-heading .eyebrow { margin-bottom: 0; }
+.section-intro,
+.modal-copy { color: var(--ink-600); line-height: 1.7; }
+.admin-header { background: var(--surface); }

@@ -25,13 +25,13 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-transparent.png?v=1" />
     <link rel="stylesheet" href="/static/styles.css?v=25" />
-    <link rel="stylesheet" href="/static/visual-language.css?v=2" />
-    <link rel="stylesheet" href="/static/reference-ui.css?v=19" />
+    <link rel="stylesheet" href="/static/visual-language.css?v=3" />
+    <link rel="stylesheet" href="/static/reference-ui.css?v=20" />
     <script src="/static/app.js?v=40" defer></script>
   </head>
   <body class="is-launching">
     <div id="launch-screen" aria-label="正在打开理工搭子局">
-      <iframe src="/static/launch-art.html" title="欢迎来到理工搭子局" tabindex="-1"></iframe>
+      <iframe src="/static/launch-art.html?v=2" title="欢迎来到理工搭子局" tabindex="-1"></iframe>
       <div id="launch-status" role="status" aria-live="polite"><p id="launch-message">正在加载…</p><button id="launch-retry" type="button" hidden>重新连接</button></div>
     </div>
     <script>
@@ -382,7 +382,7 @@
                 </label>
 
                 <button id="match-submit" class="button button-primary button-wide" type="submit">
-                  ✦ 让 Agent 帮我找
+                  <span class="brand-sparkle" aria-hidden="true">✦</span> 让 Agent 帮我找
                 </button>
               </form>
               <p id="match-request-error" class="form-error is-hidden" role="alert"></p>
