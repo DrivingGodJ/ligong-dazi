@@ -10,12 +10,13 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.engine import Dialect
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
 
@@ -53,6 +54,32 @@ class UTCDateTime(TypeDecorator[datetime]):
 
 class Base(DeclarativeBase):
     pass
+
+
+class HumanChallenge(Base):
+    __tablename__ = "human_challenges"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    answer_hash: Mapped[str] = mapped_column(String(64))
+    source_key: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+
+
+class SafetyCounter(Base):
+    __tablename__ = "safety_counters"
+
+    key: Mapped[str] = mapped_column(String(90), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    blocked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class RegistrationSuccess(Base):
+    __tablename__ = "registration_successes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_key: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class TimestampMixin:
@@ -97,6 +124,27 @@ class User(Base, TimestampMixin):
     identity_frozen: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     identity_appeal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    avatar: Mapped[UserAvatar | None] = relationship(
+        lazy="joined", uselist=False, cascade="all, delete-orphan"
+    )
+
+    @property
+    def avatar_url(self) -> str | None:
+        # Freshly constructed accounts have no avatar; never trigger async lazy IO.
+        avatar = self.__dict__.get("avatar")
+        return f"/api/v1/users/{self.id}/avatar?v={avatar.version}" if avatar else None
+
+
+class UserAvatar(Base):
+    __tablename__ = "user_avatars"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[str] = mapped_column(String(36), default=new_id)
+    content: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
 
 
 class StudentIdAppeal(Base):

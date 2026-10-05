@@ -14,8 +14,8 @@ android {
         applicationId 'app.zeabur.ligongdazi.nativeapp'
         minSdkVersion 23
         targetSdkVersion 35
-        versionCode 11
-        versionName "2.0-beta"
+        versionCode 12
+        versionName "2.1-beta"
         manifestPlaceholders = [GETUI_APPID: "S4Lc1ylHbS8bCbKAAxkaD3"]
     }
 
@@ -53,3 +53,6 @@ def bundleWebUi = tasks.register('bundleWebUi', Sync) {
 
 // Pass the producing task itself so Gradle infers the dependency for packaging and lint.
 android.sourceSets.main.assets.srcDir(bundleWebUi)
+// AGP can resolve the directory without inferring the Sync task dependency.
+// Always refresh local HTML/CSS/JS before compiling either build variant.
+tasks.named('preBuild').configure { dependsOn(bundleWebUi) }

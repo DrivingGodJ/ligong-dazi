@@ -37,6 +37,7 @@ function setup(userAgent, options = {}) {
     window: {matchMedia() {return {matches: options.displayMode || false};}},
     IS_NATIVE_ANDROID: Boolean(options.native),
     hideInlineError() {},
+    refreshHumanChallenge() {},
     showRegisterStep() {},
   });
   vm.runInContext(deviceSource + authSource, context);

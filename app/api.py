@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
+from math import ceil
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -37,6 +38,7 @@ from app.activity_media import (
     validate_image_content,
 )
 from app.agent import TOOL_CATALOG, AgentOutputError, run_matching_agent
+from app.avatar_media import AVATAR_INPUT_MAX_BYTES, normalize_avatar
 from app.colleges import match_college
 from app.core import (
     DatabaseRuntime,
@@ -78,9 +80,11 @@ from app.models import (
     PeerFeedbackReview,
     PushSubscription,
     Reminder,
+    SafetyCounter,
     StudentIdAppeal,
     SystemEvent,
     User,
+    UserAvatar,
     UserBlock,
     new_id,
     utcnow,
@@ -96,6 +100,13 @@ from app.post_activity import (
     refresh_hidden_profile,
 )
 from app.profile_summary import generate_profile_summary
+from app.safety import (
+    check_submission,
+    ensure_not_blocked,
+    issue_challenge,
+    reserve_registration,
+    verify_challenge,
+)
 from app.schemas import (
     ActivityCreate,
     ActivityJoinResult,
@@ -110,6 +121,7 @@ from app.schemas import (
     ActivityTimeVotePublic,
     ActivityTimeVoteRespond,
     AgentRunPublic,
+    AvatarUpdateResponse,
     CandidatePublic,
     FeedbackCreate,
     FeedbackResult,
@@ -177,6 +189,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 async def get_authenticated_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(auth_scheme)],
     session: SessionDep,
     settings: SettingsDep,
@@ -196,6 +209,16 @@ async def get_authenticated_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
     if claims.get("ver", 0) != user.token_version:
         raise HTTPException(status_code=401, detail="密码已更新，请重新登录")
+    identity_proof_only = user.identity_frozen and request.url.path in {
+        "/api/v1/auth/account-state",
+        "/api/v1/auth/identity-review",
+        "/api/v1/auth/identity-review/card",
+        "/api/v1/auth/identity-review/contact",
+    }
+    # A safety freeze must not prevent the original owner from proving identity
+    # before an existing appeal deadline. All ordinary app APIs remain blocked.
+    if not identity_proof_only:
+        await ensure_not_blocked(session, "user:" + user.id)
     return user
 
 
@@ -224,6 +247,7 @@ async def get_optional_authenticated_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在或已停用")
     if claims.get("ver", 0) != user.token_version:
         raise HTTPException(status_code=401, detail="密码已更新，请重新登录")
+    await ensure_not_blocked(session, "user:" + user.id)
     return user
 
 
@@ -572,10 +596,22 @@ async def reschedule_activity_reminders(session: AsyncSession, activity: Activit
     )
 
 
+@router.get("/auth/challenge")
+async def human_challenge(
+    request: Request, response: Response, session: SessionDep, settings: SettingsDep
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return await issue_challenge(session, request, settings)
+
+
 @router.post("/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
-    payload: RegisterRequest, session: SessionDep, settings: SettingsDep
+    payload: RegisterRequest, request: Request, session: SessionDep, settings: SettingsDep
 ) -> TokenResponse:
+    await verify_challenge(
+        session, request, settings, payload.challenge_id, payload.challenge_answer
+    )
+    await check_submission(session, payload.model_dump())
     if payload.campus not in {"南京", "江阴"}:
         raise HTTPException(status_code=422, detail="必须选择南京或江阴校区")
     if await session.scalar(select(User.id).where(User.student_id == payload.student_id)):
@@ -591,6 +627,7 @@ async def register(
     email = str(payload.email).lower() if payload.email else f"no-email-{new_id()}@accounts.invalid"
     if payload.email and await session.scalar(select(User.id).where(User.email == email)):
         raise HTTPException(status_code=409, detail="该邮箱已注册；旧账号请直接登录")
+    await reserve_registration(session, request, settings)
     user = User(
         email=email,
         student_id=payload.student_id,
@@ -652,6 +689,7 @@ async def create_student_id_appeal(
     description: Annotated[str | None, Form(max_length=500)] = None,
     registration_json: Annotated[str | None, Form()] = None,
 ) -> StudentIdAppealReceipt:
+    await check_submission(session, {"description": description}, claimant)
     try:
         normalized_id = normalize_student_id(student_id)
     except ValueError as exc:
@@ -712,9 +750,18 @@ async def create_student_id_appeal(
             ) from exc
         if registration.student_id != normalized_id:
             raise HTTPException(status_code=422, detail="申诉学号与注册学号不一致")
+        await check_submission(session, registration.model_dump(), claimant)
         profile = registration.model_dump(
             mode="json",
-            exclude={"student_id", "password", "password_confirmation", "email", "university"},
+            exclude={
+                "student_id",
+                "password",
+                "password_confirmation",
+                "email",
+                "university",
+                "challenge_id",
+                "challenge_answer",
+            },
         )
         password_hash = hash_password(registration.password)
         if (
@@ -816,7 +863,12 @@ async def create_student_id_appeal(
 
 
 @router.post("/auth/token", response_model=TokenResponse)
-async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDep) -> TokenResponse:
+async def login(
+    payload: LoginRequest, request: Request, session: SessionDep, settings: SettingsDep
+) -> TokenResponse:
+    await verify_challenge(
+        session, request, settings, payload.challenge_id, payload.challenge_answer
+    )
     account = (payload.account or str(payload.email)).strip()
     user = await session.scalar(
         select(User).where(
@@ -829,6 +881,8 @@ async def login(payload: LoginRequest, session: SessionDep, settings: SettingsDe
         )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="用户已停用")
+    if not user.identity_frozen:
+        await ensure_not_blocked(session, "user:" + user.id)
     token, expires_at = create_access_token(user.id, settings, user.token_version)
     return TokenResponse(
         access_token=token,
@@ -1044,6 +1098,64 @@ async def read_me(current_user: CurrentUser) -> UserMe:
     return user_me(current_user)
 
 
+@router.post("/users/me/avatar", response_model=AvatarUpdateResponse)
+async def upload_user_avatar(
+    file: UploadFile, current_user: CurrentUser, session: SessionDep,
+) -> AvatarUpdateResponse:
+    try:
+        content = await file.read(AVATAR_INPUT_MAX_BYTES + 1)
+        normalized = await asyncio.to_thread(normalize_avatar, content, file.content_type or "")
+    finally:
+        await file.close()
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    version = new_id()
+    table = UserAvatar.__table__
+    insert = sqlite_insert if session.bind.dialect.name == "sqlite" else pg_insert
+    await session.execute(insert(table).values(
+        user_id=current_user.id, version=version, content=normalized, updated_at=utcnow(),
+    ).on_conflict_do_update(index_elements=[table.c.user_id], set_={
+        "version": version, "content": normalized, "updated_at": utcnow(),
+    }))
+    await session.commit()
+    return AvatarUpdateResponse(avatar_url=f"/api/v1/users/{current_user.id}/avatar?v={version}")
+
+
+@router.delete("/users/me/avatar", response_model=AvatarUpdateResponse)
+async def remove_user_avatar(
+    current_user: CurrentUser, session: SessionDep,
+) -> AvatarUpdateResponse:
+    await session.execute(delete(UserAvatar).where(UserAvatar.user_id == current_user.id))
+    await session.commit()
+    return AvatarUpdateResponse(avatar_url=None)
+
+
+@router.get("/users/{user_id}/avatar")
+async def read_user_avatar(
+    user_id: str, current_user: CurrentUser, session: SessionDep,
+    v: str | None = Query(default=None, max_length=36),
+) -> Response:
+    user = await session.get(User, user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(404, "头像不存在")
+    blocked = await session.scalar(select(UserBlock.id).where(or_(
+        (UserBlock.blocker_id == current_user.id) & (UserBlock.blocked_id == user_id),
+        (UserBlock.blocker_id == user_id) & (UserBlock.blocked_id == current_user.id),
+    )))
+    if blocked:
+        raise HTTPException(404, "头像不存在")
+    query = select(UserAvatar.content).where(UserAvatar.user_id == user_id)
+    if v is not None:
+        query = query.where(UserAvatar.version == v)
+    content = await session.scalar(query)
+    if content is None:
+        raise HTTPException(404, "头像不存在")
+    return Response(content=content, media_type="image/jpeg", headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
 @router.patch("/users/me", response_model=UserMe)
 async def update_me(
     payload: UserProfileUpdate,
@@ -1051,6 +1163,7 @@ async def update_me(
     session: SessionDep,
 ) -> UserMe:
     values = payload.model_dump(exclude_unset=True)
+    await check_submission(session, values, current_user)
     if "student_id" in values:
         student_id = values["student_id"]
         if student_id is None:
@@ -1146,6 +1259,15 @@ async def summarize_me(
     session: SessionDep,
     settings: SettingsDep,
 ) -> ProfileSummaryResponse:
+    await check_submission(
+        session,
+        {
+            "bio": current_user.bio,
+            "interests": current_user.interests,
+            "display_name": current_user.display_name,
+            "hobby_skills": current_user.hobby_skills,
+        },
+    )
     now = utcnow()
     if current_user.ai_summary_generated_at is not None:
         next_available = current_user.ai_summary_generated_at + timedelta(
@@ -1187,6 +1309,7 @@ async def create_activity(
     session: SessionDep,
 ) -> ActivityPublic:
     campus = ensure_campus(current_user)
+    await check_submission(session, payload.model_dump(), current_user)
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2049,6 +2172,7 @@ async def create_activity_time_vote(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> ActivityTimeVotePublic:
+    await check_submission(session, payload.model_dump(), current_user)
     activity = await session.scalar(
         select(Activity).where(Activity.id == activity_id).with_for_update()
     )
@@ -2212,6 +2336,7 @@ async def preview_match(
     settings: SettingsDep,
 ) -> MatchPreviewResponse:
     ensure_campus(current_user)
+    await check_submission(session, payload.model_dump(), current_user)
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2226,7 +2351,7 @@ async def preview_match(
     if latest_request_at is not None:
         next_available = latest_request_at + timedelta(seconds=MATCH_COOLDOWN_SECONDS)
         if utcnow() < next_available:
-            retry_after = max(1, int((next_available - utcnow()).total_seconds()))
+            retry_after = max(1, ceil((next_available - utcnow()).total_seconds()))
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Agent 正在歇口气，请 {retry_after} 秒后再找一次。",
@@ -2364,6 +2489,7 @@ async def confirm_match(
     session: SessionDep,
 ) -> MatchConfirmResponse:
     ensure_campus(current_user)
+    await check_submission(session, payload.model_dump(), current_user)
     match_request = await session.scalar(
         select(MatchRequest).where(MatchRequest.id == match_request_id).with_for_update()
     )
@@ -2476,9 +2602,7 @@ async def confirm_match(
                         User.campus,
                         User.allow_invitations,
                         User.identity_frozen,
-                    ).where(
-                        User.id.in_(selected_ids), User.is_active.is_(True)
-                    )
+                    ).where(User.id.in_(selected_ids), User.is_active.is_(True))
                 )
             ).all()
             if len(selected_users) != len(selected_ids) or any(
@@ -2489,6 +2613,10 @@ async def confirm_match(
                 raise HTTPException(status_code=409, detail="有搭子已关闭邀请，请重新匹配")
             if any(frozen for _, _, _, frozen in selected_users):
                 raise HTTPException(status_code=409, detail="有搭子正在进行身份核验，请重新匹配")
+            for invitee_id, _, _, _ in selected_users:
+                counter = await session.get(SafetyCounter, "user:" + invitee_id)
+                if counter and counter.blocked_until and counter.blocked_until > utcnow():
+                    raise HTTPException(status_code=409, detail="有搭子已被安全冻结，请重新匹配")
         if len(selected_ids) > match_request.people_needed:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -2853,6 +2981,7 @@ async def submit_feedback(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> FeedbackResult:
+    await check_submission(session, payload.model_dump(), current_user)
     if payload.reviewee_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="不能评价自己")
     activity = await session.get(Activity, payload.activity_id)
@@ -2974,6 +3103,7 @@ async def submit_peer_review(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> PeerReviewResult:
+    await check_submission(session, payload.model_dump(), current_user)
     feedback = await session.scalar(
         select(Feedback).where(Feedback.id == feedback_id).with_for_update()
     )

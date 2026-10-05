@@ -26,8 +26,8 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-transparent.png?v=1" />
     <link rel="stylesheet" href="/static/styles.css?v=25" />
     <link rel="stylesheet" href="/static/visual-language.css?v=2" />
-    <link rel="stylesheet" href="/static/reference-ui.css?v=14" />
-    <script src="/static/app.js?v=37" defer></script>
+    <link rel="stylesheet" href="/static/reference-ui.css?v=19" />
+    <script src="/static/app.js?v=40" defer></script>
   </head>
   <body class="is-launching">
     <div id="launch-screen" aria-label="正在打开理工搭子局">
@@ -134,7 +134,7 @@
                 <input name="password" type="password" autocomplete="current-password" minlength="8" required />
               </label>
               <button class="button button-primary button-wide" type="submit">登录并开始组局</button>
-              <button id="forgot-password-button" class="button button-quiet button-wide" type="button">忘记密码？用学生卡找回</button>
+              <button id="forgot-password-button" class="button button-quiet button-wide" type="button">忘记密码？</button>
             </form>
 
             <div class="demo-login">
@@ -402,16 +402,38 @@
                     <h2>推荐结果</h2>
                     <p id="result-summary" class="result-summary"></p>
                   </div>
-                  <button id="new-match-button" class="button button-quiet" type="button">重新匹配</button>
+                  <div class="result-header-actions">
+                    <button id="match-help-button" class="button button-quiet" type="button">操作导览</button>
+                    <button id="new-match-button" class="button button-quiet" type="button">重新匹配</button>
+                  </div>
                 </div>
 
-                <div id="candidate-list" class="candidate-list"></div>
-
-                <div id="confirm-bar" class="confirm-bar is-hidden">
-                  <div>
-                    <strong id="selection-summary">尚未选择候选</strong>
-                    <span id="selection-note">没挑中也没关系，可以先发布活动等人加入</span>
+                <ol class="match-flow-steps" aria-label="组局步骤">
+                  <li data-match-step="selection">1 选择结果</li>
+                  <li data-match-step="review">2 核对选择</li>
+                  <li data-match-step="settings">3 确认操作</li>
+                </ol>
+                <section id="match-selection-step" aria-label="选择推荐结果">
+                  <div class="selection-dock">
+                    <div><strong id="selection-summary" aria-live="polite">尚未选择候选</strong><span id="selection-note">也可以不选搭子，直接发布到广场</span></div>
+                    <button id="review-selection-button" class="button button-primary" type="button">下一步：核对选择</button>
                   </div>
+                  <div id="candidate-list" class="candidate-list"></div>
+                </section>
+                <section id="match-review-step" class="is-hidden" aria-labelledby="selection-review-heading">
+                  <h3 id="selection-review-heading" tabindex="-1">确认搭子属性</h3>
+                  <p class="section-intro">先核对选择。此时尚未创建活动，也不会发送邀请。</p>
+                  <div id="selection-review-list" class="selection-review-list"></div>
+                  <div class="step-actions">
+                    <button class="button button-quiet" type="button" data-match-back="selection">返回修改选择</button>
+                    <button id="selection-to-settings" class="button button-primary" type="button">下一步：发布设置</button>
+                  </div>
+                </section>
+
+                <section id="match-settings-step" class="is-hidden" aria-labelledby="match-settings-heading">
+                <h3 id="match-settings-heading" tabindex="-1">发布设置</h3>
+                <div id="confirm-bar" class="confirm-bar is-hidden">
+                  <p id="confirmation-overview" class="section-intro"></p>
                   <label id="confirm-location-field" class="confirmation-location is-hidden" for="confirm-location">
                     创建活动的地点（加入已有活动可不填）
                     <input id="confirm-location" type="text" maxlength="160" placeholder="例如：江阴体育馆" />
@@ -419,13 +441,15 @@
                     <small id="confirm-location-error" class="confirmation-error is-hidden" role="alert">先填写地点再创建活动；或选择加入现有活动。</small>
                   </label>
                   <div class="confirm-actions">
-                    <label class="join-policy-select" for="match-join-policy">新活动如何加入
-                      <select id="match-join-policy"><option value="open">可自由加入</option><option value="approval">申请后全员同意</option></select>
-                    </label>
-                    <button id="create-solo-button" class="button button-quiet" type="button">先发布，等人加入</button>
-                    <button id="confirm-match-button" class="button button-accent" type="button">确认并执行</button>
+                    <div class="publish-option">
+                      <button id="confirm-match-button" class="button button-primary" type="button" aria-describedby="match-action-copy">直接发布</button>
+                      <small id="match-action-copy">不发送邀请，公开发布到广场，等待其他人加入。</small>
+                    </div>
                   </div>
+                  <p id="confirmation-status" class="form-error is-hidden" role="alert"></p>
+                  <button class="button button-quiet" type="button" data-match-back="review">返回核对选择</button>
                 </div>
+                </section>
               </div>
 
               <div id="result-success" class="success-state is-hidden" aria-live="polite">
@@ -550,6 +574,7 @@
                 <span>搭子信用</span>
                 <strong id="profile-credit">100</strong>
               </div>
+              <button id="credit-help-button" class="credit-help-button" type="button" aria-label="了解搭子信用规则" aria-haspopup="dialog">?</button>
             </div>
           </div>
 
@@ -560,7 +585,7 @@
                 <p id="ai-summary-copy">点击生成后，AI 会综合你的资料和已有活动反馈，写一段只给你看的总结。</p>
                 <small id="ai-summary-cooldown">每 5 分钟可以重新总结一次</small>
               </div>
-              <button id="generate-summary-button" class="button button-accent" type="button">✦ 让 AI 总结我</button>
+              <button id="generate-summary-button" class="button button-accent" type="button"><span class="brand-sparkle" aria-hidden="true">✦</span> 让 AI 总结我</button>
             </section>
             <section id="push-introduction" class="notification-settings is-hidden" aria-labelledby="notification-settings-heading">
               <h2 id="notification-settings-heading"><span class="section-title-icon" aria-hidden="true">●</span>活动提醒</h2>
@@ -591,6 +616,17 @@
             <div class="profile-grid">
               <section class="profile-section-card profile-basic-card" aria-labelledby="profile-basic-heading">
                 <h2 id="profile-basic-heading"><span class="section-title-icon" aria-hidden="true">●</span>基本信息</h2>
+                <div class="avatar-setting">
+                  <div id="profile-avatar-preview" class="avatar-preview" aria-label="我的头像"></div>
+                  <div class="avatar-setting-copy"><strong>头像</strong><small>会展示给其他同学；自动裁成方形并压缩。</small></div>
+                  <div class="avatar-actions">
+                    <button id="profile-avatar-upload" class="button button-quiet" type="button">上传头像</button>
+                    <button id="profile-avatar-remove" class="button button-quiet is-hidden" type="button">恢复默认</button>
+                  </div>
+                  <input id="profile-avatar-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
+                  <p id="profile-avatar-status" class="avatar-status" role="status" aria-live="polite"></p>
+                  <p id="profile-avatar-error" class="form-error is-hidden" role="alert"></p>
+                </div>
                 <label>昵称<input name="display_name" type="text" maxlength="80" required /></label>
                 <label>校区<select name="campus" required><option value="南京">南京</option><option value="江阴" selected>江阴</option></select></label>
                 <label>学院<select name="department" data-college-select><option value="">暂不填写</option></select></label>
@@ -616,6 +652,10 @@
                 </div>
               </section>
             </div>
+            <label class="profile-bio-field profile-section-card">
+              自我介绍
+              <textarea name="bio" rows="4" maxlength="500" placeholder="简单说说你的活动习惯"></textarea>
+            </label>
             <label class="invitation-preference invitation-preference-wide">
               <span class="invitation-setting-icon" aria-hidden="true">✦</span>
               <span class="invitation-preference-copy"><strong>允许别人邀请我</strong><small>关闭后不会出现在其他人的可邀请候选中。</small></span>
@@ -632,10 +672,6 @@
               <div id="hobby-skill-list" class="hobby-skill-list"></div>
               <div id="skill-marks" class="skill-marks is-hidden" aria-live="polite"></div>
             </section>
-            <label>
-              自我介绍
-              <textarea name="bio" rows="4" maxlength="500" placeholder="简单说说你的活动习惯"></textarea>
-            </label>
             <label id="push-preference" class="invitation-preference invitation-preference-wide push-preference is-hidden">
               <span class="invitation-setting-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M14.5 21a3 3 0 0 1-5 0" /></svg></span>
               <span class="invitation-preference-copy"><strong><span id="push-preference-label">本设备活动通知</span><span id="push-preference-value">已关闭</span></strong><small id="push-preference-description" aria-live="polite">关闭仅停止本设备推送，邀请和活动消息仍会保存在站内。</small></span>
@@ -671,18 +707,42 @@
     </section>
 
     <nav id="main-nav" class="main-nav is-hidden" aria-label="主要功能">
-      <button class="nav-button is-active" type="button" data-tab="match"><svg class="nav-icon nav-flower" viewBox="0 0 40 40" aria-hidden="true"><path class="nav-petal-a" d="M20 19C11 20 4 15 5 9c1-6 8-8 13-4 5 4 5 10 2 14Z"/><path class="nav-petal-b" d="M21 19c0-8 6-14 12-12 6 2 6 9 2 13-4 4-10 3-14-1Z"/><path class="nav-petal-b" d="M19 21c-7-3-14 0-14 6 0 6 7 9 12 6 5-3 6-8 2-12Z"/><path class="nav-petal-a" d="M21 21c8-2 15 3 14 9-1 6-8 8-13 4-5-4-5-9-1-13Z"/><circle class="nav-flower-center" cx="20" cy="20" r="3"/><circle class="nav-face" cx="25" cy="28" r="1.1"/><circle class="nav-face" cx="30" cy="27.5" r="1.1"/><path class="nav-smile" d="M26 31c1.4 1.5 3.1 1.4 4.2-.2"/></svg><span class="nav-label">找搭子</span></button>
+      <button class="nav-button is-active" type="button" data-tab="match"><img class="nav-icon nav-flower" src="/static/brand-flower.svg?v=2" alt="" width="40" height="40" aria-hidden="true" /><span class="nav-label">找搭子</span></button>
       <button class="nav-button" type="button" data-tab="square"><svg class="nav-icon nav-grid" viewBox="0 0 40 40" aria-hidden="true"><rect x="5" y="8" width="12" height="12" rx="3"/><rect x="22" y="8" width="12" height="12" rx="3"/><rect x="5" y="23" width="12" height="12" rx="3"/><rect x="22" y="23" width="12" height="12" rx="3"/><path class="nav-sparkle" d="m34 2 1.4 3.6L39 7l-3.6 1.4L34 12l-1.4-3.6L29 7l3.6-1.4L34 2Z"/></svg><span class="nav-label">活动广场</span></button>
       <button class="nav-button" type="button" data-tab="invitations"><svg class="nav-icon nav-envelope" viewBox="0 0 40 40" aria-hidden="true"><rect x="4" y="10" width="32" height="22" rx="5"/><path d="m6 13 14 11 14-11"/><circle class="nav-alert-dot" cx="33" cy="9" r="4"/></svg><span class="nav-label">邀请</span><span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span></button>
       <button class="nav-button" type="button" data-tab="activities"><svg class="nav-icon nav-clock" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="21" r="15"/><path d="M20 12v10l7 4M32 4l2 4m3 0-4 2"/></svg><span class="nav-label">我的活动</span><span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span></button>
       <button class="nav-button" type="button" data-tab="profile"><svg class="nav-icon nav-face-icon" viewBox="0 0 40 40" aria-hidden="true"><circle cx="19" cy="21" r="15"/><circle class="nav-face" cx="14" cy="20" r="1.4"/><circle class="nav-face" cx="24" cy="20" r="1.4"/><path class="nav-smile" d="M13 25c4 4 8 4 12 0"/><path class="nav-heart" d="M30 7c3-5 10-2 8 3-1 3-5 6-8 8-3-2-7-5-8-8-2-5 5-8 8-3Z"/></svg><span class="nav-label">我的画像</span></button>
     </nav>
 
+    <dialog id="match-tour-dialog" class="modal-card match-tour-dialog" aria-labelledby="match-tour-title">
+      <div class="modal-shell">
+        <button id="match-tour-skip" class="button button-quiet" type="button">跳过导览</button>
+        <p id="match-tour-progress" class="eyebrow"></p>
+        <h2 id="match-tour-title"></h2>
+        <p id="match-tour-copy" class="modal-copy"></p>
+        <button id="match-tour-next" class="button button-primary button-wide" type="button">点击屏幕任意处继续</button>
+      </div>
+    </dialog>
+    <dialog id="credit-help-dialog" class="modal-card" aria-labelledby="credit-help-title">
+      <div class="modal-shell">
+        <button class="modal-close" type="button" data-close-dialog="credit-help-dialog" aria-label="关闭信用说明">×</button>
+        <p class="eyebrow">规则说明</p>
+        <h2 id="credit-help-title">搭子信用是什么？</h2>
+        <p class="modal-copy">记录活动履约和经审核的互评，不是对一个人的完整评价。初始 100 分，范围 0—100 分。</p>
+        <dl class="credit-rules">
+          <dt>退出活动</dt><dd>距离开始超过 1 小时取消不扣分；开始前 1 小时内取消扣 10 分；开始后不能取消。</dd>
+          <dt>活动评价</dt><dd>到场、评分及守时／帮助他人等标签综合结算，每次调整范围为 −10 到 +3 分。爽约、安全问题、评价冲突或证据不足会先复核或保守处理，不直接凭一句话重罚。</dd>
+          <dt>认真评价与复核</dt><dd>提交经审核的评价、获得第三方支持的评价，或完成第三方复核，可加 1 分。不实严重指控经第三方确认后，原评价人扣 3 分。最终分数不超过 100 分。</dd>
+          <dt>如何影响匹配</dt><dd>信用适配度占候选搭子基础匹配分的 10%；用户明确提出最低信用要求时，会据此筛选。当前没有单凭低信用分自动禁用账号的规则。</dd>
+          <dt>如何恢复</dt><dd>通过后续活动的正向评价、认真评价和参与复核逐步恢复。当前没有每天自动回分或付费恢复机制。</dd>
+        </dl>
+      </div>
+    </dialog>
     <dialog id="password-reset-dialog" class="modal-card" aria-labelledby="password-reset-title">
       <div class="modal-shell">
         <button class="modal-close" type="button" data-close-dialog="password-reset-dialog" aria-label="关闭找回密码">×</button>
         <p class="eyebrow">账号安全</p>
-        <h2 id="password-reset-title">用学生卡找回密码</h2>
+        <h2 id="password-reset-title">找回密码</h2>
         <form id="password-reset-card-form" class="form-stack">
           <p class="modal-copy" data-student-card-unlimited-copy="本地测试模式：学生卡上传不限次数，核验失败可以立即重试。核验通过后才能设置新密码。">先核验学生卡人像面，通过后由你设置新密码。每人每天仅可上传一次，与学号申诉共用次数；材料未通过请第二天重试，北京时间凌晨重置。模型或服务器错误不扣次数，可以重试。</p>
           <label>学号<input name="student_id" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="username" minlength="6" maxlength="24" pattern="[A-Za-z0-9]{6,24}" required /></label>

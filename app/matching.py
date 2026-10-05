@@ -8,18 +8,19 @@ from difflib import SequenceMatcher
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Activity, ActivityMember, User, UserBlock, utcnow
+from app.models import Activity, ActivityMember, SafetyCounter, User, UserBlock, utcnow
 
 ACTIVITY_START_TOLERANCE = timedelta(hours=2)
 
 MATCH_WEIGHTS = {
-    "time": 0.30,
-    "activity": 0.25,
-    "location": 0.15,
-    "interest": 0.15,
-    "group_size": 0.05,
-    "social_style": 0.05,
-    "credit": 0.05,
+    "time": 0.10,
+    # Redistribute the remaining 80% in the confirmed original 25:15:15:5:5 ratio.
+    "activity": 0.80 * 25 / 65,
+    "location": 0.80 * 15 / 65,
+    "interest": 0.80 * 15 / 65,
+    "group_size": 0.80 * 5 / 65,
+    "social_style": 0.80 * 5 / 65,
+    "credit": 0.10,
 }
 
 
@@ -194,9 +195,7 @@ async def search_open_activities(
     if context.requester.gender in {"male", "female"}:
         gender_condition = or_(
             gender_condition,
-            Activity.owner_id.in_(
-                select(User.id).where(User.gender == context.requester.gender)
-            ),
+            Activity.owner_id.in_(select(User.id).where(User.gender == context.requester.gender)),
         )
     statement = (
         select(Activity, func.coalesce(member_count.c.member_count, 0))
@@ -267,6 +266,12 @@ async def search_available_users(
         User.campus == context.requester.campus,
         User.allow_invitations.is_(True),
         User.identity_frozen.is_(False),
+        ~select(SafetyCounter.key)
+        .where(
+            SafetyCounter.key == "user:" + User.id,
+            SafetyCounter.blocked_until > utcnow(),
+        )
+        .exists(),
         User.credit_score >= personalization.min_credit,
     ]
     if blocked_ids:
@@ -402,10 +407,7 @@ def score_user_candidate(
         explanation.append("符合你提出的同院系偏好")
     if personalization.same_grade and candidate.grade_year == context.requester.grade_year:
         explanation.append("符合你提出的同年级偏好")
-    if (
-        personalization.preferred_style
-        and effective_style == personalization.preferred_style
-    ):
+    if personalization.preferred_style and effective_style == personalization.preferred_style:
         explanation.append("社交方式符合个性化需求")
     if learned_activity_match:
         explanation.append("过往活动习惯与本次需求相符")
@@ -443,8 +445,7 @@ def score_activity_candidate(
     if overlap_seconds:
         time_score = max(
             0.0,
-            40.0 + 60.0 * overlap_seconds / request_seconds
-            - min(20.0, abs(start_shift) / 360),
+            40.0 + 60.0 * overlap_seconds / request_seconds - min(20.0, abs(start_shift) / 360),
         )
     else:
         gap_seconds = max(
@@ -455,8 +456,7 @@ def score_activity_candidate(
         time_score = max(10.0, 40.0 - gap_seconds / 240)
     time_score = min(100.0, time_score)
     location_score = (
-        location_match_score(context.location, activity.location)
-        if context.location else 65.0
+        location_match_score(context.location, activity.location) if context.location else 65.0
     )
     available_slots = activity.capacity - member_count
     capacity_score = 100.0 if available_slots >= context.people_needed else 70.0
@@ -470,8 +470,7 @@ def score_activity_candidate(
     if start_shift_minutes:
         direction = "早" if start_shift < 0 else "晚"
         time_explanation = (
-            f"开始时间比你填写的{direction} {start_shift_minutes} 分钟，"
-            "请核对实际时间"
+            f"开始时间比你填写的{direction} {start_shift_minutes} 分钟，请核对实际时间"
         )
     elif activity.ends_at != context.ends_at:
         time_explanation = "结束时间与你填写的不同，请核对实际时间"
@@ -483,7 +482,9 @@ def score_activity_candidate(
         score=round(score, 1),
         factors=factors,
         explanation=[
-            "已有同类活动可直接加入",
+            "已有同类活动可申请参与，需现有成员同意"
+            if activity.join_policy == "approval"
+            else "已有同类活动可直接加入",
             time_explanation,
             f"地点相近度 {int(location_score)} 分" if context.location else "可参考现有活动地点",
             f"当前还有 {available_slots} 个名额",

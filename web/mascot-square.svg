@@ -1,16 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 240" role="img" aria-labelledby="title desc">
-  <title id="title">活动广场花花</title><desc id="desc">拿着小喇叭的紫色花朵。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 240" role="img" aria-labelledby="title">
+  <title id="title">活动广场花花</title>
+  <!-- Shared confirmed mascot-bloom silhouette and palette; only the accessory differs. -->
   <defs>
-    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7240D9"/><stop offset="1" stop-color="#A75FF0"/></linearGradient>
-    <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E1BFFF"/><stop offset="1" stop-color="#AC68EC"/></linearGradient>
-    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#88CB72"/><stop offset="1" stop-color="#4B9B55"/></linearGradient>
-    <filter id="s" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="9" stdDeviation="9" flood-color="#4B218C" flood-opacity=".17"/></filter>
+    <linearGradient id="p1" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7240D9"/><stop offset="1" stop-color="#AB68F1"/></linearGradient>
+    <linearGradient id="p2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E4C3FF"/><stop offset="1" stop-color="#A660E9"/></linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7ACB94"/><stop offset="1" stop-color="#3AA873"/></linearGradient>
+    <linearGradient id="yellow" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#FFF7B8"/><stop offset="1" stop-color="#FFC84C"/></linearGradient>
+    <filter id="s" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#4B218C" flood-opacity=".2"/></filter>
   </defs>
-  <path d="M154 133c-1 25 0 50 2 78" fill="none" stroke="#56AA67" stroke-width="9" stroke-linecap="round"/>
-  <path d="M153 181c-30-23-48-14-49 5 20 17 38 15 49-5Zm5 12c25-25 45-18 48 0-16 18-35 19-48 0Z" fill="url(#l)"/>
-  <g filter="url(#s)"><path d="M153 111c-33 7-67-8-71-36-4-28 20-43 45-36 28 8 41 38 26 72Z" fill="url(#a)"/><path d="M155 112c4-31 30-55 57-49 25 6 31 32 15 52-18 23-50 25-72-3Z" fill="url(#b)"/><path d="M151 115c-29-13-61-2-70 24-8 24 11 43 36 42 29-1 47-32 34-66Z" fill="url(#b)"/><path d="M156 116c30-5 60 13 63 40 3 25-20 39-43 32-27-8-39-41-20-72Z" fill="url(#a)"/></g>
-  <g fill="#FFE78A"><ellipse cx="154" cy="101" rx="9" ry="17"/><ellipse cx="167" cy="113" rx="17" ry="9"/><ellipse cx="155" cy="126" rx="9" ry="17"/><ellipse cx="142" cy="113" rx="17" ry="9"/><circle cx="155" cy="113" r="8" fill="#FFC43E"/></g>
-  <g fill="#26183E"><ellipse cx="174" cy="151" rx="4" ry="6"/><ellipse cx="197" cy="149" rx="4" ry="6"/></g><path d="M180 161c5 7 13 6 17-.5" fill="none" stroke="#26183E" stroke-width="5" stroke-linecap="round"/>
+  <path d="M130 130c-2 26-1 54 0 85" fill="none" stroke="#4AA979" stroke-width="10" stroke-linecap="round"/>
+  <path d="M128 177c-30-25-50-18-53 2 20 19 40 18 53-2Z" fill="url(#leaf)"/>
+  <path d="M132 193c28-25 49-18 52 1-18 19-39 19-52-1Z" fill="url(#leaf)"/>
+  <g filter="url(#s)">
+    <path d="M127 110c-36 8-76-8-83-41-7-31 18-52 49-48 35 4 56 41 45 73-3 8-6 12-11 16Z" fill="url(#p1)"/>
+    <path d="M129 111c4-36 31-68 65-67 31 1 46 27 35 55-13 32-54 46-84 28-8-5-12-10-16-16Z" fill="url(#p2)"/>
+    <path d="M126 113c-33-15-74-4-91 25-16 27 1 54 31 59 35 5 69-22 75-56 2-10-4-20-15-28Z" fill="url(#p2)"/>
+    <path d="M130 114c35-6 73 15 82 48 8 30-14 51-44 50-35-1-61-35-56-69 2-11 8-21 18-29Z" fill="url(#p1)"/>
+  </g>
+  <g fill="url(#yellow)">
+    <ellipse cx="129" cy="99" rx="13" ry="24" transform="rotate(-20 129 99)"/>
+    <ellipse cx="144" cy="111" rx="24" ry="13" transform="rotate(-22 144 111)"/>
+    <ellipse cx="133" cy="128" rx="13" ry="24" transform="rotate(-20 133 128)"/>
+    <ellipse cx="116" cy="116" rx="24" ry="13" transform="rotate(-22 116 116)"/>
+    <circle cx="130" cy="113" r="12" fill="#FFC33A"/>
+  </g>
+  <g fill="#26183E"><ellipse cx="151" cy="158" rx="5" ry="7"/><ellipse cx="181" cy="154" rx="5" ry="7"/></g>
+  <path d="M158 169c6 8 17 7 22-.7" fill="none" stroke="#26183E" stroke-width="6" stroke-linecap="round"/>
+  <path d="M32 91c-8 4-14 10-17 19M214 27c8 2 15 7 20 14" fill="none" stroke="#8B54DE" stroke-width="4" stroke-linecap="round" opacity=".5"/>
   <g transform="translate(24 116) rotate(-12)"><path d="m40 29-2 21h12l5-22" fill="#7541CC"/><path d="M17 5 61 18v18L17 47Z" fill="#A774EA"/><rect x="57" y="17" width="17" height="20" rx="7" fill="#7743CA"/><ellipse cx="17" cy="26" rx="12" ry="22" fill="#8050CE"/><ellipse cx="17" cy="26" rx="7" ry="16" fill="#EEE0FF"/></g>
-  <path d="M58 102 49 89m22 8-1-15m-30 30-15-2" fill="none" stroke="#8753DE" stroke-width="5" stroke-linecap="round" opacity=".7"/>
 </svg>

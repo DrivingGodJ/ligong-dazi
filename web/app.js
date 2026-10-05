@@ -46,6 +46,10 @@ const state = {
   profileSaveInFlight: false,
   profileSavedSnapshot: "",
   profileEditRevision: 0,
+  avatarCache: new Map(),
+  avatarGeneration: 0,
+  avatarRevision: 0,
+  avatarBusy: false,
   passwordResetToken: null,
   passwordResetStudentId: "",
   passwordResetRevision: 0,
@@ -53,6 +57,11 @@ const state = {
   pushBusy: false,
   pushStatusRevision: 0,
   pushControlsSeen: new Set(),
+  matchStep: "selection",
+  matchConfirmPending: false,
+  tourStep: 0,
+  matchCooldownTimer: null,
+  matchCooldownUntil: 0,
 };
 
 const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
@@ -143,6 +152,12 @@ const elements = {
   peerReviewList: document.querySelector("#peer-review-list"),
   peerTaskCount: document.querySelector("#peer-task-count"),
   profileForm: document.querySelector("#profile-form"),
+  profileAvatar: document.querySelector("#profile-avatar-preview"),
+  avatarFile: document.querySelector("#profile-avatar-file"),
+  avatarUpload: document.querySelector("#profile-avatar-upload"),
+  avatarRemove: document.querySelector("#profile-avatar-remove"),
+  avatarStatus: document.querySelector("#profile-avatar-status"),
+  avatarError: document.querySelector("#profile-avatar-error"),
   profileCredit: document.querySelector("#profile-credit"),
   profileStatus: document.querySelector("#profile-status"),
   profileRetry: document.querySelector("#profile-retry"),
@@ -227,6 +242,9 @@ async function api(path, options = {}) {
     const error = new Error(formatApiError(payload, `请求失败（${response.status}）`));
     error.status = response.status;
     error.code = payload?.detail?.code || null;
+    error.retryAfter = Number(response.headers.get("Retry-After") || 0);
+    error.sanitizedFields = payload?.detail?.sanitized_fields || {};
+    applySanitizedSubmission(error.sanitizedFields, path);
     throw error;
   }
   return payload;
@@ -267,7 +285,7 @@ function showToast(message) {
 
 function showInlineError(element, message) {
   element.textContent = message;
-  element.classList.remove("is-success", "is-pending");
+  element.classList.remove("is-success", "is-pending", "cooldown-notice");
   element.classList.remove("is-hidden");
 }
 
@@ -312,6 +330,7 @@ function switchAuthPanel(panel) {
   document.querySelector("#register-tab").setAttribute("aria-selected", String(!loginActive));
   hideInlineError(elements.authError);
   elements.authAppealButton.classList.add("is-hidden");
+  refreshHumanChallenge(loginActive ? elements.loginForm : elements.registerForm);
   if (!loginActive) {
     showRegisterStep("account");
     const platform = registrationInstallPlatform();
@@ -414,6 +433,9 @@ async function logout(showMessage = true) {
   }
   window.clearTimeout(state.profileSaveTimer);
   window.clearInterval(state.notificationTimer);
+  window.clearInterval(state.matchCooldownTimer);
+  state.matchCooldownUntil = 0;
+  state.matchCooldownTimer = null;
   state.notificationTimer = null;
   state.notificationLoadRevision += 1;
   state.pushStatusRevision += 1;
@@ -421,6 +443,7 @@ async function logout(showMessage = true) {
   state.profileEditRevision += 1;
   state.token = null;
   state.user = null;
+  clearAvatarImages();
   state.preview = null;
   state.selectedUsers.clear();
   state.selectedActivity = null;
@@ -447,7 +470,7 @@ async function handleLogin(event) {
   try {
     const result = await api("/auth/token", {
       method: "POST",
-      body: JSON.stringify({ account: String(form.get("account")).trim(), password: form.get("password") }),
+      body: JSON.stringify({ account: String(form.get("account")).trim(), password: form.get("password"), ...humanChallengePayload(elements.loginForm) }),
     });
     state.token = result.access_token;
     localStorage.setItem(TOKEN_KEY, state.token);
@@ -464,6 +487,7 @@ async function handleLogin(event) {
     showInlineError(elements.authError, error.message);
   } finally {
     setButtonLoading(button, false);
+    refreshHumanChallenge(elements.loginForm);
   }
 }
 
@@ -487,6 +511,7 @@ function registrationPayload() {
       : [],
     preferred_locations: splitList(form.get("preferred_locations")),
     social_style: form.get("social_style") || "balanced",
+    ...humanChallengePayload(elements.registerForm),
   };
 }
 
@@ -525,6 +550,7 @@ async function handleRegister(event) {
     elements.authAppealButton.classList.toggle("is-hidden", error.code !== "student_id_taken");
   } finally {
     setButtonLoading(button, false);
+    refreshHumanChallenge(elements.registerForm);
   }
 }
 
@@ -725,6 +751,10 @@ function initializeDates() {
 
 function setResultView(view) {
   window.clearTimeout(state.resultEnterTimer);
+  const inResultFlow = view === "content" || view === "success";
+  // Keep the search values in the DOM, but show only the current creation screen.
+  elements.matchForm.closest(".request-panel").classList.toggle("is-hidden", inResultFlow);
+  document.querySelector("#panel-match > .page-heading").classList.toggle("is-hidden", inResultFlow);
   elements.resultEmpty.classList.toggle("is-hidden", view !== "empty");
   elements.resultRunning.classList.toggle("is-hidden", view !== "running");
   elements.resultContent.classList.toggle("is-hidden", view !== "content");
@@ -740,6 +770,7 @@ function setResultView(view) {
   } else {
     elements.resultPanel.classList.remove("is-results-entering");
   }
+  if (view === "success") elements.resultPanel.scrollIntoView({block: "start", behavior: "instant"});
 }
 
 function startRunningProgress() {
@@ -891,6 +922,8 @@ async function handleMatch(event) {
     elements.resultRunning.classList.add("is-completing");
     await animationDelay(300);
     setResultView("content");
+    showMatchStep("selection");
+    if (!localStorage.getItem(`dazi_match_tour_v1:${state.user.id}`)) openMatchTour();
   } catch (error) {
     window.clearInterval(state.runningTimer);
     if (error.code === "agent_output_error") {
@@ -900,10 +933,14 @@ async function handleMatch(event) {
       setResultView("empty");
     }
     showInlineError(requestError, error.message);
-    showToast(error.message);
+    if (error.status === 429 && error.retryAfter) {
+      startMatchCooldown(error.retryAfter);
+      showToast("正在冷却，倒计时结束后即可再次匹配");
+    } else showToast(error.message);
     requestError.scrollIntoView({ block: "center", behavior: "smooth" });
   } finally {
     setButtonLoading(elements.matchSubmit, false);
+    if (state.matchCooldownUntil > Date.now()) elements.matchSubmit.disabled = true;
   }
 }
 
@@ -939,9 +976,132 @@ function genderIcon(gender) {
 function personProfileTag(user, compact = false) {
   const info = genderInfo(user.gender);
   return `<button class="person-profile-tag ${info.className} ${compact ? "is-compact" : ""}" type="button" data-user-profile="${escapeHtml(user.id)}" aria-label="查看${escapeHtml(user.display_name)}的个人主页">
-    <span class="person-symbol" aria-hidden="true">${genderIcon(user.gender)}</span>
+    ${avatarMarkup(user)}
     <span><strong>${escapeHtml(user.display_name)}</strong><small>${escapeHtml(info.label)} · 查看主页</small></span>
   </button>`;
+}
+
+function avatarMarkup(user, large = false) {
+  const validUrl = /^\/api\/v1\/users\/[a-f0-9-]{36}\/avatar\?v=[a-f0-9-]{36}$/i.test(user.avatar_url || "");
+  const initial = Array.from(user.display_name || "搭")[0];
+  return `<span class="user-avatar${large ? " is-large" : ""}" data-avatar-user="${escapeHtml(user.id)}" aria-hidden="true"><span class="avatar-fallback">${escapeHtml(initial)}</span>${validUrl ? `<img data-avatar-url="${escapeHtml(user.avatar_url)}" alt="" hidden />` : ""}</span>`;
+}
+
+async function loadAvatarImage(image) {
+  if (image.dataset.avatarLoading || !state.token) return;
+  image.dataset.avatarLoading = "true";
+  const path = image.dataset.avatarUrl;
+  const token = state.token, generation = state.avatarGeneration;
+  let entry = state.avatarCache.get(path);
+  if (!entry) {
+    entry = {url: null, promise: null};
+    state.avatarCache.set(path, entry);
+    entry.promise = apiBlob(path.replace(API_ROOT, "")).then((blob) => {
+      if (token !== state.token || generation !== state.avatarGeneration) return null;
+      entry.url = URL.createObjectURL(blob);
+      while (state.avatarCache.size > 64) {
+        const oldest = [...state.avatarCache].find(([key, item]) => key !== path && item.url);
+        if (!oldest) break;
+        URL.revokeObjectURL(oldest[1].url);
+        state.avatarCache.delete(oldest[0]);
+      }
+      return entry.url;
+    });
+  }
+  try {
+    const url = await entry.promise;
+    if (!url || token !== state.token || generation !== state.avatarGeneration || !image.isConnected) return;
+    image.onload = () => {
+      if (token !== state.token || generation !== state.avatarGeneration || !image.isConnected) return;
+      image.hidden = false;
+      const fallback = image.parentElement?.querySelector(".avatar-fallback");
+      if (fallback) fallback.hidden = true;
+    };
+    image.onerror = () => {
+      image.hidden = true;
+      const fallback = image.parentElement?.querySelector(".avatar-fallback");
+      if (fallback) fallback.hidden = false;
+    };
+    image.src = url;
+  } catch {
+    if (state.avatarCache.get(path) === entry) state.avatarCache.delete(path);
+    // Keep the default avatar when offline, blocked or temporarily unavailable.
+  }
+}
+
+function initializeAvatarImages() {
+  const hydrate = (root) => {
+    if (root.nodeType !== 1) return;
+    if (root.matches("img[data-avatar-url]")) loadAvatarImage(root);
+    root.querySelectorAll("img[data-avatar-url]").forEach(loadAvatarImage);
+  };
+  new MutationObserver((changes) => changes.forEach((change) => change.addedNodes.forEach(hydrate)))
+    .observe(document.body, {childList: true, subtree: true});
+  hydrate(document.body);
+}
+
+function clearAvatarImages() {
+  state.avatarGeneration += 1;
+  state.avatarBusy = false;
+  state.avatarCache.forEach((entry) => { if (entry.url) URL.revokeObjectURL(entry.url); });
+  state.avatarCache.clear();
+  document.querySelectorAll(".user-avatar img").forEach((image) => {
+    image.onload = null; image.onerror = null;
+    image.removeAttribute("src"); image.hidden = true;
+    const fallback = image.parentElement.querySelector(".avatar-fallback");
+    if (fallback) fallback.hidden = false;
+  });
+}
+
+function renderAvatarSetting() {
+  if (!state.user) return;
+  elements.profileAvatar.innerHTML = avatarMarkup(state.user, true);
+  elements.avatarUpload.textContent = state.user.avatar_url ? "更换头像" : "上传头像";
+  elements.avatarUpload.disabled = state.avatarBusy;
+  elements.avatarRemove.disabled = state.avatarBusy;
+  elements.avatarRemove.classList.toggle("is-hidden", !state.user.avatar_url);
+}
+
+async function changeAvatar(remove = false) {
+  if (state.avatarBusy || !state.user) return;
+  const file = elements.avatarFile.files[0];
+  if (!remove && !file) return;
+  const token = state.token;
+  hideInlineError(elements.avatarError);
+  state.avatarBusy = true;
+  renderAvatarSetting();
+  elements.avatarUpload.setAttribute("aria-busy", "true");
+  elements.avatarStatus.textContent = remove ? "正在恢复默认头像…" : "正在压缩并上传头像…";
+  try {
+    let body;
+    if (!remove) {
+      if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error("请选择 JPG、PNG、WebP 或 GIF 图片");
+      if (file.size > 25 * 1024 * 1024) throw new Error("原图片不能超过 25 MB，请先在相册中缩小");
+      const photo = await imageToCompressedBlob(file, {square: true, maxEdge: 512, targetBytes: 128 * 1024, quality: .78});
+      if (token !== state.token) return;
+      body = new FormData(); body.append("file", photo, "avatar.jpg");
+    }
+    const result = await api("/users/me/avatar", {method: remove ? "DELETE" : "POST", body});
+    if (token !== state.token || !state.user) return;
+    state.user.avatar_url = result.avatar_url;
+    state.avatarRevision += 1;
+    document.querySelectorAll("[data-avatar-user]").forEach((node) => {
+      if (node.dataset.avatarUser === state.user.id) node.outerHTML = avatarMarkup(state.user, node.classList.contains("is-large"));
+    });
+    elements.avatarStatus.textContent = remove ? "已恢复默认头像" : "头像已更新";
+  } catch (error) {
+    if (token === state.token) {
+      elements.avatarStatus.textContent = "头像未修改，可重新选择图片重试";
+      showInlineError(elements.avatarError, error.message);
+    }
+  } finally {
+    if (token === state.token) {
+      state.avatarBusy = false;
+      elements.avatarFile.value = "";
+      elements.avatarUpload.removeAttribute("aria-busy");
+      renderAvatarSetting();
+    }
+  }
 }
 
 function activityGenderSummary(activity, interactive = true) {
@@ -1018,7 +1178,7 @@ function renderCandidates() {
         ? `<div class="candidate-time-note">时间与你填写的不完全一致，请核对实际时段</div>` : "";
       return `
         <article class="candidate-card" data-type="${candidate.candidate_type}" data-id="${escapeHtml(candidate.candidate_id)}">
-          <input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" aria-label="选择${escapeHtml(copy.title)}" />
+          <label class="candidate-select"><input type="${inputType}" name="${inputName}" value="${escapeHtml(candidate.candidate_id)}" aria-label="选择${escapeHtml(copy.title)}" /><span>选择</span></label>
           <div class="candidate-main">
             ${userHeading}
             <p class="candidate-meta">${escapeHtml(copy.meta)}</p>
@@ -1044,6 +1204,109 @@ function renderMatchResult() {
   updateSelectionSummary();
 }
 
+function showMatchStep(step) {
+  state.matchStep = step;
+  ["selection", "review", "settings"].forEach((name) => {
+    document.querySelector(`#match-${name}-step`).classList.toggle("is-hidden", name !== step);
+    const indicator = document.querySelector(`[data-match-step="${name}"]`);
+    indicator.classList.toggle("is-current", name === step);
+    if (name === step) indicator.setAttribute("aria-current", "step");
+    else indicator.removeAttribute("aria-current");
+  });
+  if (step === "review") {
+    const selected = state.preview.candidates.filter((candidate) => candidate.candidate_type === "activity"
+      ? candidate.candidate_id === state.selectedActivity : state.selectedUsers.has(candidate.candidate_id));
+    document.querySelector("#selection-review-list").innerHTML = selected.length ? selected.map((candidate) => {
+      const copy = candidate.candidate_type === "user" ? userCandidateCopy(candidate) : activityCandidateCopy(candidate);
+      const interests = candidate.user?.interests || [];
+      return `<article class="selection-review-card"><h4>${escapeHtml(copy.title)}</h4><p>${escapeHtml(copy.meta)}</p>${candidate.user ? genderBadge(candidate.user.gender) : activityGenderSummary(candidate.activity, false)}<p>${escapeHtml(interests.join(" · "))}</p><p>${escapeHtml(candidate.explanation.join("；"))}</p></article>`;
+    }).join("") : '<p class="selection-review-card">本次不主动邀请搭子。下一步可以把活动公开发布到广场，等待其他人加入。</p>';
+    document.querySelector("#selection-to-settings").textContent = state.selectedActivity ? "下一步：确认加入" : "下一步：发布设置";
+  }
+  if (step === "settings") {
+    updateSelectionSummary();
+    document.querySelector("#match-settings-heading").textContent = state.selectedActivity ? "确认加入已有活动" : "发布设置";
+  }
+  const heading = step === "selection" ? elements.resultPanel
+    : document.querySelector(step === "review" ? "#selection-review-heading" : "#match-settings-heading");
+  heading.scrollIntoView({block: "start", behavior: "instant"});
+  if (step !== "selection") heading.focus({preventScroll: true});
+}
+
+const MATCH_TOUR_STEPS = [
+  ["先选择，再核对", "勾选框用来选择搭子或已有活动。点击名字可查看资料，不会发送邀请。点击屏幕任意处继续。"],
+  ["加入已有活动，或创建新活动", "选择已有活动时，按它的时间和地点加入；选择搭子时，下一步会先核对他们的属性。两种选择不能同时进行。"],
+  ["下一步就在结果上方", "点击结果上方的“下一步：核对选择”继续。最后只有一个按钮：不选搭子时直接发布，选择搭子时发送邀请并发布，选择已有活动时申请参与或直接加入。"],
+];
+
+function openMatchTour() {
+  state.tourStep = 0;
+  renderMatchTour();
+  document.querySelector("#match-tour-dialog").showModal();
+}
+
+function renderMatchTour() {
+  const [title, copy] = MATCH_TOUR_STEPS[state.tourStep];
+  document.querySelector("#match-tour-progress").textContent = `操作导览 · ${state.tourStep + 1} / 3`;
+  document.querySelector("#match-tour-title").textContent = title;
+  document.querySelector("#match-tour-copy").textContent = copy;
+  document.querySelector("#match-tour-next").textContent = state.tourStep === 2 ? "点击屏幕任意处完成导览" : "点击屏幕任意处继续";
+}
+
+function finishMatchTour() {
+  localStorage.setItem(`dazi_match_tour_v1:${state.user.id}`, "seen");
+  document.querySelector("#match-tour-dialog").close();
+}
+
+function startMatchCooldown(seconds) {
+  window.clearInterval(state.matchCooldownTimer);
+  state.matchCooldownUntil = Date.now() + seconds * 1000;
+  const update = () => {
+    const remaining = Math.max(0, Math.ceil((state.matchCooldownUntil - Date.now()) / 1000));
+    const message = document.querySelector("#match-request-error");
+    if (remaining) {
+      message.classList.remove("is-hidden");
+      message.textContent = `距离下次可找搭子还有 ${remaining} 秒，已填写的内容会保留。`;
+      message.classList.add("cooldown-notice");
+      elements.matchSubmit.disabled = true;
+    } else {
+      window.clearInterval(state.matchCooldownTimer);
+      message.textContent = "现在可以再次找搭子。";
+      elements.matchSubmit.disabled = false;
+    }
+  };
+  update();
+  state.matchCooldownTimer = window.setInterval(update, 1000);
+}
+
+function getMatchConfirmationAction() {
+  if (state.selectedActivity) {
+    const activity = state.preview?.candidates.find(
+      (item) => item.candidate_type === "activity" && item.candidate_id === state.selectedActivity,
+    )?.activity;
+    const requiresApproval = activity?.join_policy === "approval";
+    return {
+      joiningExisting: true,
+      createSoloActivity: false,
+      label: requiresApproval ? "申请参与活动" : "直接加入活动",
+      loadingLabel: requiresApproval ? "正在申请…" : "正在加入…",
+      copy: requiresApproval
+        ? "按已有活动的安排提交申请，等待现有成员同意；不会新建活动或发送邀请。"
+        : "按已有活动的安排直接加入；不会新建活动或发送邀请。",
+    };
+  }
+  const createSoloActivity = state.selectedUsers.size === 0;
+  return {
+    joiningExisting: false,
+    createSoloActivity,
+    label: createSoloActivity ? "直接发布" : "发送邀请并发布",
+    loadingLabel: "正在发布…",
+    copy: createSoloActivity
+      ? "不发送邀请，公开发布到广场，等待其他人加入。"
+      : `向已选的 ${state.selectedUsers.size} 位搭子发送邀请，并公开到广场等待补足人数。`,
+  };
+}
+
 function updateSelectionSummary() {
   document.querySelectorAll(".candidate-card").forEach((card) => {
     const selected =
@@ -1053,7 +1316,7 @@ function updateSelectionSummary() {
     card.classList.toggle("is-selected", selected);
     card.querySelector("input").checked = selected;
   });
-  const needsLocation = !state.preview.requestedLocation;
+  const needsLocation = !state.selectedActivity && !state.preview.requestedLocation;
   elements.confirmLocationField.classList.toggle("is-hidden", !needsLocation);
   elements.confirmBar.classList.toggle("needs-location", needsLocation);
   elements.resultContent.classList.toggle("needs-location", needsLocation);
@@ -1065,23 +1328,22 @@ function updateSelectionSummary() {
     elements.selectionNote.textContent = activity
       ? `将按现有活动的时间与地点加入：${formatDate(activity.starts_at)} 至 ${formatDate(activity.ends_at)}`
       : "将按现有活动的实际时间和地点加入";
-    elements.confirmButton.textContent = "确认加入活动";
-    elements.confirmButton.disabled = false;
   } else if (state.selectedUsers.size) {
     elements.selectionSummary.textContent = `已选择 ${state.selectedUsers.size} 位搭子`;
     elements.selectionNote.textContent = needsLocation
-      ? "邀请前先填写下方地点，活动创建后才会发出邀请"
-      : "确认后将创建活动并发出邀请";
-    elements.confirmButton.textContent = "确认创建并邀请";
-    elements.confirmButton.disabled = false;
+      ? "下一步先核对搭子，再填写地点与发布设置；此时尚未发送邀请。"
+      : "下一步先核对搭子，再确认发布；此时尚未发送邀请。";
   } else {
     elements.selectionSummary.textContent = "尚未选择候选";
-    elements.selectionNote.textContent = needsLocation
-      ? "可以先填地点发布活动，也可以选择上方现有活动"
-      : "没挑中也没关系，可以先发布活动等人加入";
-    elements.confirmButton.textContent = "确认并执行";
-    elements.confirmButton.disabled = true;
+    elements.selectionNote.textContent = "不选搭子也能继续：核对后进入发布设置，公开到广场等人加入。";
   }
+  const action = getMatchConfirmationAction();
+  elements.confirmButton.textContent = action.label;
+  elements.confirmButton.disabled = state.matchConfirmPending;
+  document.querySelector("#match-action-copy").textContent = action.copy;
+  document.querySelector("#confirmation-overview").textContent = state.selectedActivity
+    ? elements.selectionNote.textContent
+    : state.selectedUsers.size ? `已选择 ${state.selectedUsers.size} 位邀请对象，尚未发送邀请。` : "未选择邀请对象，将直接创建新活动。";
 }
 
 function handleCandidateSelection(event) {
@@ -1100,6 +1362,9 @@ function handleCandidateSelection(event) {
   }
   const card = event.target.closest(".candidate-card");
   if (!card) return;
+  // Cancel only a label/card click. Cancelling an input's native click would
+  // restore its previous checked state after our render (including keyboard Space).
+  if (!event.target.matches("input")) event.preventDefault();
   const candidateId = card.dataset.id;
   if (card.dataset.type === "activity") {
     state.selectedActivity = state.selectedActivity === candidateId ? null : candidateId;
@@ -1117,11 +1382,13 @@ function handleCandidateSelection(event) {
   updateSelectionSummary();
 }
 
-async function confirmMatch(createSoloActivity = false) {
-  if (!state.preview) return;
-  if (!createSoloActivity && !state.selectedActivity && !state.selectedUsers.size) return;
+async function confirmMatch() {
+  if (!state.preview || state.matchConfirmPending) return;
+  const action = getMatchConfirmationAction();
+  const {joiningExisting, createSoloActivity} = action;
+  const requestId = state.preview.match_request_id;
   hideInlineError(elements.matchError);
-  const joiningExisting = !createSoloActivity && Boolean(state.selectedActivity);
+  hideInlineError(document.querySelector("#confirmation-status"));
   const location = state.preview.requestedLocation || elements.confirmLocation.value.trim();
   if (!joiningExisting && !location) {
     elements.confirmLocationError.classList.remove("is-hidden");
@@ -1129,19 +1396,16 @@ async function confirmMatch(createSoloActivity = false) {
     return;
   }
   elements.confirmLocationError.classList.add("is-hidden");
-  const actionButton = createSoloActivity
-    ? document.querySelector("#create-solo-button")
-    : elements.confirmButton;
-  setButtonLoading(actionButton, true, createSoloActivity ? "正在发布…" : "正在执行…");
+  state.matchConfirmPending = true;
+  setButtonLoading(elements.confirmButton, true, action.loadingLabel);
   try {
-    const result = await api(`/matches/${state.preview.match_request_id}/confirm`, {
+    const result = await api(`/matches/${requestId}/confirm`, {
       method: "POST",
       body: JSON.stringify({
-        candidate_user_ids: createSoloActivity ? [] : [...state.selectedUsers],
-        existing_activity_id: createSoloActivity ? null : state.selectedActivity,
+        candidate_user_ids: joiningExisting || createSoloActivity ? [] : [...state.selectedUsers],
+        existing_activity_id: joiningExisting ? state.selectedActivity : null,
         create_solo_activity: createSoloActivity,
         location: joiningExisting ? null : location,
-        join_policy: document.querySelector("#match-join-policy").value,
       }),
     });
     elements.successTitle.textContent =
@@ -1149,17 +1413,20 @@ async function confirmMatch(createSoloActivity = false) {
     elements.successCopy.textContent = result.status === "applied"
       ? `正在等待“${result.activity.title}”的现有成员逐一同意，消息会在站内提醒你。`
       : createSoloActivity
-      ? `“${result.activity.title}”现在由你先占一席，其他同学可以在匹配时加入。`
+      ? `“${result.activity.title}”已公开到广场，没有发送邀请，等待其他同学加入。`
       : result.invitations.length
-        ? `“${result.activity.title}”已创建，并向 ${result.invitations.length} 位候选发送邀请。`
+        ? `“${result.activity.title}”已公开到广场，并向 ${result.invitations.length} 位搭子发送邀请，等待补足人数。`
         : `你已加入“${result.activity.title}”，可以在“我的活动”查看安排。`;
     setResultView("success");
     loadInvitations(true);
     loadActivities(true);
   } catch (error) {
     showInlineError(elements.matchError, error.message);
+    showInlineError(document.querySelector("#confirmation-status"), error.message);
   } finally {
-    setButtonLoading(actionButton, false);
+    state.matchConfirmPending = false;
+    setButtonLoading(elements.confirmButton, false);
+    if (state.preview?.match_request_id === requestId) updateSelectionSummary();
   }
 }
 
@@ -1305,7 +1572,7 @@ function renderInvitations(invitations) {
             <h2>${escapeHtml(invitation.activity.title)}</h2>
             <span class="status-label ${statusClass}">${escapeHtml(statusText)}</span>
           </div>
-          <p>${escapeHtml(invitation.inviter.display_name)} 邀请你 · ${escapeHtml(formatDate(invitation.activity.starts_at))}</p>
+          <p class="inviter-identity">${avatarMarkup(invitation.inviter)}<span>${escapeHtml(invitation.inviter.display_name)} 邀请你 · ${escapeHtml(formatDate(invitation.activity.starts_at))}</span></p>
           <p>${escapeHtml(invitation.activity.location)} · ${escapeHtml(invitation.activity.category)}</p>
           ${activityGenderSummary(invitation.activity)}
         </div>
@@ -2089,17 +2356,20 @@ function imageToCompressedBlob(file, options = {}) {
     image.onload = () => {
       URL.revokeObjectURL(sourceUrl);
       try {
-        const longest = Math.max(image.naturalWidth, image.naturalHeight);
+        const sourceWidth = options.square ? Math.min(image.naturalWidth, image.naturalHeight) : image.naturalWidth;
+        const sourceHeight = options.square ? sourceWidth : image.naturalHeight;
+        const longest = Math.max(sourceWidth, sourceHeight);
         if (!longest) throw new Error("照片尺寸无效，请重新选择");
         const scale = Math.min(1, (options.maxEdge || 1280) / longest);
         const canvas = document.createElement("canvas");
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+        canvas.height = Math.max(1, Math.round(sourceHeight * scale));
         const context = canvas.getContext("2d");
         if (!context) throw new Error("当前设备无法处理照片，请换一张试试");
         context.fillStyle = "#fff";
         context.fillRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const draw = () => context.drawImage(image, (image.naturalWidth - sourceWidth) / 2, (image.naturalHeight - sourceHeight) / 2, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+        draw();
         const encode = (quality, attempt = 0) => canvas.toBlob((blob) => {
           if (!blob) { reject(new Error("照片压缩失败，请重新选择")); return; }
           if (blob.size > (options.targetBytes || 600 * 1024) && attempt < 4) {
@@ -2108,7 +2378,7 @@ function imageToCompressedBlob(file, options = {}) {
               canvas.height = Math.max(1, Math.round(canvas.height * 0.85));
               context.fillStyle = "#fff";
               context.fillRect(0, 0, canvas.width, canvas.height);
-              context.drawImage(image, 0, 0, canvas.width, canvas.height);
+              draw();
             }
             encode(Math.max(0.38, quality - 0.1), attempt + 1);
             return;
@@ -2148,7 +2418,7 @@ function openPasswordReset() {
   state.passwordResetRevision += 1;
   state.passwordResetToken = null;
   state.passwordResetStudentId = "";
-  document.querySelector("#password-reset-title").textContent = "用学生卡找回密码";
+  document.querySelector("#password-reset-title").textContent = "找回密码";
   elements.passwordResetCardForm.reset();
   elements.passwordResetPasswordForm.reset();
   elements.passwordResetCardForm.classList.remove("is-hidden");
@@ -2411,9 +2681,12 @@ function renderUserProfilePage(page) {
     .join("");
   elements.userProfileContent.innerHTML = `
     <header class="profile-dialog-hero">
-      <div>
+      <div class="profile-avatar-heading">
+        ${avatarMarkup(user, true)}
+        <div>
         <div class="profile-identity-row"><h2>${escapeHtml(user.display_name)}</h2>${genderBadge(user.gender)}</div>
         <p>${escapeHtml([user.department, gradeLabels[user.grade_year], user.campus].filter(Boolean).join(" · ") || user.university)}</p>
+        </div>
       </div>
       <div class="profile-credit-badge"><span>搭子信用</span><strong>${escapeHtml(user.credit_score)}</strong></div>
     </header>
@@ -2482,6 +2755,7 @@ async function openActivityParticipants(activityId, activityTitle = "这场活�
 
 function populateProfileForm() {
   if (!state.user) return;
+  renderAvatarSetting();
   window.clearTimeout(state.profileSaveTimer);
   const form = elements.profileForm.elements;
   elements.legacyStudentId.classList.toggle("is-hidden", Boolean(state.user.student_id));
@@ -2684,6 +2958,7 @@ async function flushProfileSave() {
     return;
   }
   const savedRevision = state.profileEditRevision;
+  const avatarRevision = state.avatarRevision;
   const token = state.token;
   state.profileSaveInFlight = true;
   elements.profileStatus.textContent = "正在自动保存…";
@@ -2694,7 +2969,9 @@ async function flushProfileSave() {
       keepalive: true,
     });
     if (state.token !== token) return;
+    const latestAvatar = state.user?.avatar_url;
     state.user = savedUser;
+    if (avatarRevision !== state.avatarRevision) state.user.avatar_url = latestAvatar;
     state.profileSavedSnapshot = snapshot;
     elements.accountName.textContent = state.user.display_name;
     elements.profileCredit.textContent = String(state.user.credit_score);
@@ -2715,7 +2992,115 @@ async function flushProfileSave() {
   }
 }
 
+function initializePasswordControls() {
+  document.querySelectorAll('#login-form input[type="password"], #register-form input[type="password"], #password-reset-password-form input[type="password"]').forEach((input, index) => {
+    const wrapper = document.createElement("span");
+    wrapper.className = "password-control";
+    input.id ||= `password-field-${index}`;
+    input.before(wrapper);
+    wrapper.append(input);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "password-toggle";
+    button.textContent = "显示";
+    button.setAttribute("aria-controls", input.id);
+    button.setAttribute("aria-label", "显示密码");
+    button.setAttribute("aria-pressed", "false");
+    wrapper.append(button);
+    const hide = () => { input.type = "password"; button.textContent = "显示"; button.setAttribute("aria-label", "显示密码"); button.setAttribute("aria-pressed", "false"); };
+    button.addEventListener("click", () => {
+      const visible = input.type === "password";
+      input.type = visible ? "text" : "password";
+      button.textContent = visible ? "隐藏" : "显示";
+      button.setAttribute("aria-label", visible ? "隐藏密码" : "显示密码");
+      button.setAttribute("aria-pressed", String(visible));
+    });
+    input.form.addEventListener("reset", hide);
+  });
+}
+
+function initializeHumanChallenges() {
+  [elements.loginForm, elements.registerForm].forEach((form) => {
+    const box = document.createElement("div");
+    box.className = "human-challenge";
+    box.innerHTML = `<label for="${form.id}-challenge-answer">图片验证码</label><div class="human-challenge-image"><img alt="六位英文字母或数字验证码" width="240" height="72" /><button class="button button-quiet" type="button">换一张</button></div><input id="${form.id}-challenge-answer" name="challenge_answer" type="text" inputmode="text" autocomplete="off" autocapitalize="characters" maxlength="6" placeholder="输入图中的六位字符" /><small class="challenge-status" role="status">正在加载验证码…</small>`;
+    const submit = form.querySelector('[type="submit"]');
+    (form === elements.registerForm ? submit.closest(".register-actions") : submit).before(box);
+    box.querySelector("button").addEventListener("click", () => refreshHumanChallenge(form));
+  });
+  refreshHumanChallenge(elements.loginForm);
+}
+
+async function refreshHumanChallenge(form) {
+  const box = form.querySelector(".human-challenge");
+  if (!box) return;
+  const revision = Number(box.dataset.revision || 0) + 1;
+  box.dataset.revision = revision;
+  form.dataset.challengeId = "";
+  box.querySelector("input").value = "";
+  try {
+    const challenge = await api("/auth/challenge", {cache: "no-store"});
+    if (Number(box.dataset.revision) !== revision) return;
+    box.classList.toggle("is-hidden", !challenge.enabled);
+    box.querySelector("input").required = Boolean(challenge.enabled);
+    if (challenge.enabled) {
+      form.dataset.challengeId = challenge.challenge_id;
+      box.querySelector("img").src = challenge.image;
+      box.querySelector(".challenge-status").textContent = "不区分大小写，5 分钟内有效；看不清可换一张。";
+    }
+  } catch {
+    if (Number(box.dataset.revision) !== revision) return;
+    box.querySelector(".challenge-status").textContent = "验证码加载失败，请点击“换一张”重试。";
+  }
+}
+
+function humanChallengePayload(form) {
+  return {challenge_id: form.dataset.challengeId || null, challenge_answer: form.elements.challenge_answer?.value || null};
+}
+
+function applySanitizedSubmission(fields, path) {
+  const form = path.startsWith("/matches/") ? elements.matchForm
+    : path === "/users/me" ? elements.profileForm : path === "/auth/register" ? elements.registerForm
+    : path === "/feedback" ? elements.feedbackForm
+    : /\/feedback\/[^/]+\/peer-review$/.test(path) ? elements.peerReviewForm
+    : /\/activities\/[^/]+\/time-votes$/.test(path) ? elements.timeVoteForm
+    : path === "/auth/student-id-appeals" ? elements.studentAppealForm : null;
+  if (!form) return;
+  Object.entries(fields).forEach(([name, value]) => {
+    if (name === "hobby_skills" && Array.isArray(value)) {
+      form.querySelectorAll("[data-skill-name], [name=register_skill_name]").forEach((input, index) => {
+        if (value[index]) input.value = value[index].name;
+      });
+      return;
+    }
+    if (/\/matches\/[^/]+\/confirm$/.test(path) && name === "location") {
+      elements.confirmLocation.value = value || "";
+      return;
+    }
+    const field = form.elements.namedItem(name === "category" && form === elements.matchForm ? "custom_category" : name);
+    if (field && "value" in field && !["checkbox", "radio"].includes(field.type)) field.value = Array.isArray(value) ? value.join("，") : value || "";
+  });
+}
+
 function bindEvents() {
+  initializeAvatarImages();
+  elements.avatarUpload.addEventListener("click", () => { if (!state.avatarBusy) elements.avatarFile.click(); });
+  elements.avatarFile.addEventListener("change", () => changeAvatar());
+  elements.avatarRemove.addEventListener("click", () => changeAvatar(true));
+  initializePasswordControls();
+  initializeHumanChallenges();
+  document.querySelector("#credit-help-button").addEventListener("click", () => document.querySelector("#credit-help-dialog").showModal());
+  document.querySelector("#review-selection-button").addEventListener("click", () => showMatchStep("review"));
+  document.querySelector("#selection-to-settings").addEventListener("click", () => showMatchStep("settings"));
+  document.querySelectorAll("[data-match-back]").forEach((button) => button.addEventListener("click", () => showMatchStep(button.dataset.matchBack)));
+  document.querySelector("#match-help-button").addEventListener("click", openMatchTour);
+  document.querySelector("#match-tour-dialog").addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.target.closest("#match-tour-skip") || state.tourStep === 2) finishMatchTour();
+    else { state.tourStep += 1; renderMatchTour(); }
+  });
+  document.querySelector("#match-tour-dialog").addEventListener("cancel", () => localStorage.setItem(`dazi_match_tour_v1:${state.user.id}`, "seen"));
   if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) {
     document.querySelector(".demo-login")?.remove();
   }
@@ -2880,8 +3265,7 @@ function bindEvents() {
   document.querySelector("#new-match-button").addEventListener("click", resetMatchResult);
   document.querySelector("#start-another-button").addEventListener("click", resetMatchResult);
   elements.candidateList.addEventListener("click", handleCandidateSelection);
-  elements.confirmButton.addEventListener("click", () => confirmMatch(false));
-  document.querySelector("#create-solo-button").addEventListener("click", () => confirmMatch(true));
+  elements.confirmButton.addEventListener("click", () => confirmMatch());
   elements.invitationList.addEventListener("click", respondInvitation);
   elements.activityList.addEventListener("click", (event) => {
     const participantButton = event.target.closest("[data-activity-participants]");
@@ -2932,14 +3316,14 @@ function bindEvents() {
     queueProfileSave(true);
   });
   elements.profileForm.addEventListener("input", (event) => {
-    if (event.target.id === "push-notifications-toggle") return;
+    if (["push-notifications-toggle", "profile-avatar-file"].includes(event.target.id)) return;
     if (event.target.name === "preferred_group_min" || event.target.name === "preferred_group_max") {
       updateGroupRangeOutputs(event.target.name);
     }
     queueProfileSave();
   });
   elements.profileForm.addEventListener("change", (event) => {
-    if (event.target.id === "push-notifications-toggle") return;
+    if (["push-notifications-toggle", "profile-avatar-file"].includes(event.target.id)) return;
     queueProfileSave(true);
   });
   elements.profileRetry.addEventListener("click", () => queueProfileSave(true));
@@ -3042,6 +3426,10 @@ async function initialize() {
     else if (!["南京", "江阴"].includes(state.user.campus) || !state.user.student_id) switchTab("profile");
   } catch (error) {
     if (error.status === 401) logout(false);
+    else if (error.status === 423) {
+      showAuthShell();
+      showInlineError(elements.authError, error.message);
+    }
     else if (IS_NATIVE_ANDROID && (error instanceof TypeError || error.status >= 500)) showNativeOfflineState();
     else throw error;
   }

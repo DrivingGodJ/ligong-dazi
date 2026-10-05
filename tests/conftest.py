@@ -22,6 +22,8 @@ STUDENT_CARD_IMAGE = _card_buffer.getvalue()
 async def client(tmp_path) -> AsyncIterator[httpx.AsyncClient]:
     settings = Settings(
         environment="test",
+        human_verification_enabled=False,
+        registration_guard_enabled=False,
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
         auto_create_schema=True,
         jwt_secret=SecretStr("test-secret-with-enough-entropy-for-tests"),

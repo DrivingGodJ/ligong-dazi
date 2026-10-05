@@ -66,6 +66,8 @@ def clean_hobby_skills(value: list[HobbySkill]) -> list[HobbySkill]:
 
 
 class RegisterRequest(ApiModel):
+    challenge_id: str | None = Field(default=None, max_length=36)
+    challenge_answer: str | None = Field(default=None, max_length=12)
     student_id: str
     # Kept for older API clients; the current signup form does not ask for email.
     email: EmailStr | None = None
@@ -125,6 +127,8 @@ class RegisterRequest(ApiModel):
 
 
 class LoginRequest(ApiModel):
+    challenge_id: str | None = Field(default=None, max_length=36)
+    challenge_answer: str | None = Field(default=None, max_length=12)
     account: str | None = Field(default=None, max_length=320)
     email: EmailStr | None = None  # Keeps older clients and existing email accounts usable.
     password: str = Field(min_length=8, max_length=128)
@@ -296,6 +300,7 @@ class UserProfileUpdate(ApiModel):
 
 class UserPublic(ApiModel):
     id: str
+    avatar_url: str | None = None
     display_name: str
     university: str
     campus: str | None
@@ -321,6 +326,10 @@ class UserMe(UserPublic):
     created_at: datetime
     ai_summary: str | None
     ai_summary_generated_at: datetime | None
+
+
+class AvatarUpdateResponse(ApiModel):
+    avatar_url: str | None
 
 
 class ProfileSummaryResponse(ApiModel):

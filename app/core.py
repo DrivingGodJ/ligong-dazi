@@ -56,9 +56,15 @@ class Settings(BaseSettings):
     activity_photo_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     identity_card_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     local_unlimited_student_card_uploads: bool = False
+    human_verification_enabled: bool = True
+    registration_guard_enabled: bool = True
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> Settings:
+        if self.environment == "production" and (
+            not self.human_verification_enabled or not self.registration_guard_enabled
+        ):
+            raise ValueError("production 环境不能关闭验证码或频繁注册保护")
         host = self.ai_base_url.lower()
         if self.ai_vendor == "custom":
             if "api.deepseek.com" in host:

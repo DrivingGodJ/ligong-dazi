@@ -22,6 +22,7 @@ test("APK bundles every referenced static UI resource without bundling admin or 
     assert.ok(included.has(file), `${file} is missing from the APK bundle`);
   }
   assert.doesNotMatch(bundle, /'admin\.|'ligong-dazi.*\.apk|downloads\/|launch-screen\.png/);
+  assert.match(gradle, /tasks\.named\('preBuild'\)\.configure\s*\{\s*dependsOn\(bundleWebUi\)\s*\}/);
 });
 
 test("native WebView serves the shell locally while leaving data requests on HTTPS", () => {
