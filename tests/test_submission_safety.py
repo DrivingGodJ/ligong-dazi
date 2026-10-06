@@ -5,6 +5,7 @@ from datetime import timedelta
 
 import httpx
 import pytest
+from fastapi import Request
 from pydantic import SecretStr, ValidationError
 from sqlalchemy import func, select
 
@@ -29,7 +30,7 @@ from app.models import (
     User,
     utcnow,
 )
-from app.safety import inspect_text
+from app.safety import REGISTRATION_COUNTER_PREFIX, inspect_text, source_key
 from tests.conftest import STUDENT_CARD_IMAGE, register_user
 from tests.test_student_registration import appeal_upload
 
@@ -46,6 +47,19 @@ def registration(student_id):
         "password": "test-password-123",
         "password_confirmation": "test-password-123",
     }
+
+
+async def seed_registration_receipts(client, count, created_at=None):
+    source = source_key(
+        Request({"type": "http", "client": client._transport.client}), settings_for(client)
+    )
+    async with client._transport.app.state.database.session_factory() as session:
+        session.add_all(
+            RegistrationSuccess(source_key=source, created_at=created_at or utcnow())
+            for _ in range(count)
+        )
+        await session.commit()
+    return source
 
 
 async def test_captcha_is_server_enforced_expiring_and_single_use(client, monkeypatch):
@@ -108,9 +122,15 @@ async def test_captcha_is_server_enforced_expiring_and_single_use(client, monkey
 
 async def test_registration_freeze_persists_and_does_not_disable_existing_accounts(client):
     settings_for(client).registration_guard_enabled = True
-    for i in range(3):
-        response = await client.post("/api/v1/auth/register", json=registration(f"RATE20260{i}"))
-        assert response.status_code == 201, response.text
+    source = await seed_registration_receipts(client, 74)
+    response = await client.post("/api/v1/auth/register", json=registration("RATE202600"))
+    assert response.status_code == 201, response.text
+    # The 75th successful account immediately starts the pause; a 76th attempt
+    # is not needed to activate it.
+    async with client._transport.app.state.database.session_factory() as session:
+        guard = await session.get(SafetyCounter, REGISTRATION_COUNTER_PREFIX + source)
+        original_until = guard.blocked_until
+        assert utcnow() + timedelta(minutes=59) < original_until <= utcnow() + timedelta(hours=1)
     # Duplicate/invalid registration must not spend the successful registration allowance.
     assert (
         await client.post("/api/v1/auth/register", json=registration("RATE202600"))
@@ -123,15 +143,23 @@ async def test_registration_freeze_persists_and_does_not_disable_existing_accoun
         json=registration("RATE202604"),
         headers={"X-Forwarded-For": "203.0.113.9"},
     )
-    assert retry.status_code in {423, 429}
+    assert retry.status_code == 429
+    # A separate IP is not paused, even though forwarding headers cannot bypass it.
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=client._transport.app, client=("203.0.113.5", 123)),
+        base_url="http://test",
+    ) as other_source:
+        assert (
+            await other_source.post("/api/v1/auth/register", json=registration("RATEOTHER01"))
+        ).status_code == 201
     login = await client.post(
         "/api/v1/auth/token", json={"account": "RATE202600", "password": "test-password-123"}
     )
     assert login.status_code == 200
     async with client._transport.app.state.database.session_factory() as session:
-        assert await session.scalar(select(func.count()).select_from(User)) == 3
-        guard = await session.scalar(select(SafetyCounter))
-        assert guard.blocked_until > utcnow() + timedelta(hours=23)
+        assert await session.scalar(select(func.count()).select_from(User)) == 2
+        guard = await session.get(SafetyCounter, REGISTRATION_COUNTER_PREFIX + source)
+        assert guard.blocked_until == original_until
         guard.blocked_until = utcnow() - timedelta(seconds=1)
         guard.window_started_at = utcnow() - timedelta(days=1)
         for receipt in (await session.scalars(select(RegistrationSuccess))).all():
@@ -144,32 +172,105 @@ async def test_registration_freeze_persists_and_does_not_disable_existing_accoun
 
 async def test_parallel_registration_cannot_exceed_source_limit(client):
     settings_for(client).registration_guard_enabled = True
+    source = await seed_registration_receipts(client, 73)
     responses = await asyncio.gather(
         *(
             client.post("/api/v1/auth/register", json=registration(f"PAR202600{i}"))
             for i in range(5)
         )
     )
-    assert sum(response.status_code == 201 for response in responses) == 3
-    assert all(response.status_code in {201, 423, 429} for response in responses)
-
-
-async def test_registration_limit_uses_a_sliding_hour_not_a_reset_boundary(client):
-    settings_for(client).registration_guard_enabled = True
-    for i in range(3):
-        assert (
-            await client.post("/api/v1/auth/register", json=registration(f"SLIDE20260{i}"))
-        ).status_code == 201
+    assert sum(response.status_code == 201 for response in responses) == 2
+    assert all(response.status_code in {201, 429} for response in responses)
     async with client._transport.app.state.database.session_factory() as session:
-        counter = await session.scalar(select(SafetyCounter))
-        counter.window_started_at = utcnow() - timedelta(hours=2)
-        for receipt in (await session.scalars(select(RegistrationSuccess))).all():
-            receipt.created_at = utcnow() - timedelta(minutes=30)
+        assert await session.scalar(
+            select(func.count())
+            .select_from(RegistrationSuccess)
+            .where(RegistrationSuccess.source_key == source)
+        ) == 75
+        assert await session.scalar(select(func.count()).select_from(SystemEvent)) == 1
+
+
+async def test_registration_limit_uses_a_rolling_minute_and_pause_lasts_one_hour(
+    client, monkeypatch
+):
+    settings_for(client).registration_guard_enabled = True
+    now = utcnow()
+    monkeypatch.setattr("app.safety.utcnow", lambda: now)
+    source = await seed_registration_receipts(client, 74, now - timedelta(seconds=30))
+    async with client._transport.app.state.database.session_factory() as session:
+        session.add(
+            SafetyCounter(
+                key=REGISTRATION_COUNTER_PREFIX + source,
+                count=500,
+                window_started_at=now - timedelta(minutes=2),
+            )
+        )
         await session.commit()
-    # The counter's old boundary cannot erase three successes within the last hour.
+    # An expired counter window cannot erase 74 successes still in the rolling minute.
+    assert (
+        await client.post("/api/v1/auth/register", json=registration("SLIDE202600"))
+    ).status_code == 201
+    async with client._transport.app.state.database.session_factory() as session:
+        guard = await session.get(SafetyCounter, REGISTRATION_COUNTER_PREFIX + source)
+        assert guard.count == 1
+        assert guard.blocked_until == now + timedelta(hours=1)
+    now += timedelta(minutes=2)
     assert (
         await client.post("/api/v1/auth/register", json=registration("SLIDE202603"))
     ).status_code == 429
+    now += timedelta(minutes=58, seconds=1)
+    assert (
+        await client.post("/api/v1/auth/register", json=registration("SLIDE202603"))
+    ).status_code == 201
+
+
+@pytest.mark.parametrize("age_seconds", [59, 60, 61])
+async def test_registration_window_counts_only_the_last_60_seconds(
+    client, monkeypatch, age_seconds
+):
+    settings_for(client).registration_guard_enabled = True
+    now = utcnow()
+    monkeypatch.setattr("app.safety.utcnow", lambda: now)
+    await seed_registration_receipts(client, 75, now - timedelta(seconds=age_seconds))
+    response = await client.post("/api/v1/auth/register", json=registration("MINBOUNDARY01"))
+    assert response.status_code == (429 if age_seconds < 60 else 201)
+
+
+async def test_legacy_registration_pause_no_longer_blocks_and_account_freezes_remain(client):
+    settings_for(client).registration_guard_enabled = True
+    source = await seed_registration_receipts(client, 3)
+    old_until = utcnow() + timedelta(hours=24)
+    async with client._transport.app.state.database.session_factory() as session:
+        session.add_all(
+            SafetyCounter(key=key, count=3, window_started_at=utcnow(), blocked_until=old_until)
+            for key in ("register:" + source, "user:preserved-security-freeze")
+        )
+        await session.commit()
+    assert (
+        await client.post("/api/v1/auth/register", json=registration("LEGACYREG01"))
+    ).status_code == 201
+    async with client._transport.app.state.database.session_factory() as session:
+        for key in ("register:" + source, "user:preserved-security-freeze"):
+            assert (await session.get(SafetyCounter, key)).blocked_until == old_until
+        guard = await session.get(SafetyCounter, REGISTRATION_COUNTER_PREFIX + source)
+        assert guard.blocked_until is None
+
+
+async def test_failed_75th_registration_rolls_back_receipt_pause_and_event(client, monkeypatch):
+    settings_for(client).registration_guard_enabled = True
+    source = await seed_registration_receipts(client, 74)
+    with monkeypatch.context() as patch:
+        # Simulate an integrity failure after reservation, not an early validation error.
+        patch.setattr("app.api.hash_password", lambda _: None)
+        failed = await client.post("/api/v1/auth/register", json=registration("ROLLBACKREG01"))
+    assert failed.status_code == 409
+    async with client._transport.app.state.database.session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(RegistrationSuccess)) == 74
+        assert await session.scalar(select(func.count()).select_from(SystemEvent)) == 0
+        assert await session.get(SafetyCounter, REGISTRATION_COUNTER_PREFIX + source) is None
+    assert (
+        await client.post("/api/v1/auth/register", json=registration("ROLLBACKREG01"))
+    ).status_code == 201
 
 
 @pytest.mark.parametrize("disabled", ["human_verification_enabled", "registration_guard_enabled"])

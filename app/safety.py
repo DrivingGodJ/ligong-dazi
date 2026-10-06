@@ -59,6 +59,13 @@ TEXT_FIELDS = {
     "note",
 }
 
+REGISTRATION_LIMIT = 75
+REGISTRATION_WINDOW = timedelta(minutes=1)
+REGISTRATION_PAUSE = timedelta(hours=1)
+# A policy-specific namespace retires old 3/hour, 24-hour registration pauses
+# without touching account safety freezes or deleting their audit records.
+REGISTRATION_COUNTER_PREFIX = "register:v2:"
+
 
 def source_key(request: Request, settings: Settings) -> str:
     # Never trust caller-supplied X-Forwarded-For. The deployment's trusted proxy must
@@ -160,12 +167,12 @@ async def verify_challenge(
         )
 
 
-async def increment_counter(session: AsyncSession, key: str, hours: int) -> SafetyCounter:
+async def increment_counter(session: AsyncSession, key: str, window: timedelta) -> SafetyCounter:
     now = utcnow()
     table = SafetyCounter.__table__
     insert = sqlite_insert if session.bind.dialect.name == "sqlite" else pg_insert
     stmt = insert(table).values(key=key, count=1, window_started_at=now)
-    stale = table.c.window_started_at <= now - timedelta(hours=hours)
+    stale = table.c.window_started_at <= now - window
     await session.execute(
         stmt.on_conflict_do_update(
             index_elements=[table.c.key],
@@ -198,54 +205,64 @@ async def ensure_not_blocked(session: AsyncSession, key: str) -> None:
 async def reserve_registration(session: AsyncSession, request: Request, settings: Settings) -> None:
     if not settings.registration_guard_enabled:
         return
-    key = "register:" + source_key(request, settings)
-    existing = await session.get(SafetyCounter, key)
-    if existing and existing.blocked_until and existing.blocked_until > utcnow():
+    source = source_key(request, settings)
+    key = REGISTRATION_COUNTER_PREFIX + source
+    # Lock first, then read the pause and receipts. Concurrent requests must see
+    # the pause committed by the 75th successful registration, not a stale read.
+    counter = await increment_counter(session, key, REGISTRATION_WINDOW)
+    now = utcnow()
+    if counter.blocked_until and counter.blocked_until > now:
         raise HTTPException(
             429,
             detail={
                 "code": "registration_frozen",
-                "message": "当前来源注册过于频繁，注册暂停中；已有账号仍可登录。",
-                "blocked_until": existing.blocked_until.isoformat(),
+                "message": "当前网络注册过于频繁，注册暂停中；已有账号仍可登录。",
+                "blocked_until": counter.blocked_until.isoformat(),
             },
         )
-    counter = await increment_counter(session, key, 1)
-    # The upsert acquires a database write/row lock before counting receipts.
-    # A sliding hour prevents a burst on either side of a fixed window boundary.
-    cutoff = utcnow() - timedelta(hours=1)
+    # A rolling minute prevents bursts across fixed clock-minute boundaries.
+    cutoff = now - REGISTRATION_WINDOW
     recent_count = await session.scalar(
         select(func.count())
         .select_from(RegistrationSuccess)
         .where(
-            RegistrationSuccess.source_key == key.removeprefix("register:"),
+            RegistrationSuccess.source_key == source,
             RegistrationSuccess.created_at > cutoff,
         )
     )
-    if recent_count >= 3:
-        counter.blocked_until = utcnow() + timedelta(hours=24)
+    if recent_count + 1 >= REGISTRATION_LIMIT:
+        counter.blocked_until = now + REGISTRATION_PAUSE
         session.add(
             SystemEvent(
                 category="submission_safety",
                 status="attention",
                 title="频繁注册来源已冻结",
-                message="同来源一小时内已注册三个账号，后续注册暂停24小时。",
-                details={"source_key": key, "blocked_until": counter.blocked_until.isoformat()},
+                message="同来源一分钟内已成功注册75个账号，后续注册暂停1小时。",
+                details={
+                    "source_key": key,
+                    "blocked_until": counter.blocked_until.isoformat(),
+                    "window_seconds": 60,
+                    "successful_registration_limit": REGISTRATION_LIMIT,
+                },
             )
         )
+    if recent_count >= REGISTRATION_LIMIT:
+        # Defensive fallback for pre-existing receipts with no matching counter.
         await session.commit()
         raise HTTPException(
             429,
             detail={
                 "code": "registration_frozen",
-                "message": "当前来源注册过于频繁，注册已暂停 24 小时；已有账号仍可登录。",
+                "message": "当前网络注册过于频繁，注册已暂停 1 小时；已有账号仍可登录。",
                 "blocked_until": counter.blocked_until.isoformat(),
             },
         )
-    # Commit with the new user, so duplicate/failed registrations consume nothing.
+    # The 75th account succeeds and commits its receipt, pause and event together.
+    # Duplicate/failed registrations roll back all of them and consume nothing.
     await session.execute(
         delete(RegistrationSuccess).where(RegistrationSuccess.created_at <= cutoff)
     )
-    session.add(RegistrationSuccess(source_key=key.removeprefix("register:")))
+    session.add(RegistrationSuccess(source_key=source, created_at=now))
 
 
 def normalized_text(text: str) -> str:
@@ -310,7 +327,7 @@ async def check_submission(session: AsyncSession, fields: dict, user: User | Non
     until = None
     count = 0
     if malicious and user:
-        counter = await increment_counter(session, "user:" + user.id, 24)
+        counter = await increment_counter(session, "user:" + user.id, timedelta(hours=24))
         count = counter.count
         if count >= 2:
             until = utcnow() + timedelta(hours=24 if count == 2 else 24 * 7)
