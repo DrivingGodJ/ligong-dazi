@@ -65,6 +65,23 @@ const state = {
 };
 
 const LEVEL_LABELS = ["", "小白", "入门", "熟练", "擅长", "精通"];
+const squareLive = {
+  initialized: false,
+  active: false,
+  contextRevision: 0,
+  requestRevision: 0,
+  controller: null,
+  busy: false,
+  timer: null,
+  clockTimer: null,
+  filters: { search: "", category: "", date: "" },
+  categories: [],
+  pendingIds: [],
+  ownerKey: "",
+  loadedFilterKey: "",
+  joining: new Set(),
+  pull: null,
+};
 const COLLEGES = Object.freeze([
   "机械工程学院", "化学与化工学院", "电子工程与光电技术学院", "计算机科学与工程学院",
   "经济管理学院", "能源与动力工程学院", "自动化学院", "物理学院",
@@ -228,15 +245,16 @@ function formatApiError(payload, fallback) {
 }
 
 async function api(path, options = {}) {
+  const requestToken = state.token;
   const headers = new Headers(options.headers || {});
-  if (state.token) headers.set("Authorization", `Bearer ${state.token}`);
+  if (requestToken) headers.set("Authorization", `Bearer ${requestToken}`);
   if (options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
   const response = await fetch(`${API_ROOT}${path}`, { ...options, headers });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/auth/")) {
+    if (response.status === 401 && requestToken === state.token && !path.startsWith("/auth/")) {
       logout(false);
     }
     const error = new Error(formatApiError(payload, `请求失败（${response.status}）`));
@@ -443,6 +461,7 @@ async function logout(showMessage = true) {
   state.profileEditRevision += 1;
   state.token = null;
   state.user = null;
+  resetSquareLive();
   clearAvatarImages();
   state.preview = null;
   state.selectedUsers.clear();
@@ -482,13 +501,109 @@ async function handleLogin(event) {
     await loadCurrentUser();
     elements.loginForm.reset();
     switchTab(state.user.campus && state.user.student_id ? "match" : "profile");
-    if (!state.user.student_id) showToast("旧账号请到我的画像补填学号；原邮箱仍能登录");
+    if (!state.user.student_id) showToast("旧账号请到个人主页补填学号；原邮箱仍能登录");
   } catch (error) {
     showInlineError(elements.authError, error.message);
   } finally {
     setButtonLoading(button, false);
     refreshHumanChallenge(elements.loginForm);
   }
+}
+
+function registrationInterestInputs() {
+  return [...elements.registerForm.querySelectorAll('input[name="interests"]')];
+}
+
+function updateRegistrationInterestCount() {
+  document.querySelector("#register-interest-count").textContent = `已选择 ${registrationInterestInputs().filter((input) => input.checked).length} 项，最多 30 项。`;
+}
+
+function appendRegistrationInterest(value) {
+  const row = document.createElement("div");
+  row.className = "registration-custom-interest";
+  const label = document.createElement("label");
+  label.className = "choice-chip";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.name = "interests";
+  input.value = value;
+  input.checked = true;
+  const text = document.createElement("span");
+  text.textContent = value;
+  label.append(input, text);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "button button-quiet registration-interest-remove";
+  remove.textContent = "×";
+  remove.setAttribute("aria-label", `移除自定义活动：${value}`);
+  remove.addEventListener("click", () => {
+    row.remove();
+    hideInlineError(document.querySelector("#register-interest-error"));
+    updateRegistrationInterestCount();
+    document.querySelector("#register-custom-interest").focus();
+  });
+  row.append(label, remove);
+  document.querySelector("#register-interest-choices").append(row);
+}
+
+function addRegistrationInterest() {
+  const draft = document.querySelector("#register-custom-interest");
+  const value = draft.value.trim();
+  const inputs = registrationInterestInputs();
+  const error = !value ? "先填写一个活动名称，再点击添加。"
+    : [...value].length > 50 ? "活动名称最多 50 个字，请缩短后再添加。"
+    : inputs.some((input) => input.value === value) ? "这个活动已经在上方，可以直接勾选。"
+    : inputs.filter((input) => input.checked).length >= 30 ? "最多选择 30 项活动，请先取消一项再添加。" : "";
+  if (error) {
+    showInlineError(document.querySelector("#register-interest-error"), error);
+    draft.focus();
+    return false;
+  }
+  appendRegistrationInterest(value);
+  draft.value = "";
+  hideInlineError(document.querySelector("#register-interest-error"));
+  updateRegistrationInterestCount();
+  draft.focus();
+  return true;
+}
+
+function applyRegistrationInterests(values) {
+  elements.registerForm.querySelectorAll(".registration-custom-interest").forEach((row) => {
+    if (row.querySelector("input").checked) row.remove();
+  });
+  const inputs = registrationInterestInputs();
+  inputs.forEach((input) => { input.checked = false; });
+  [...new Set(values.map((value) => String(value).trim()).filter(Boolean))].forEach((value) => {
+    const existing = inputs.find((input) => input.value === value);
+    if (existing) existing.checked = true;
+    else appendRegistrationInterest(value);
+  });
+  updateRegistrationInterestCount();
+}
+
+function initializeRegistrationInterests() {
+  const draft = document.querySelector("#register-custom-interest");
+  const error = document.querySelector("#register-interest-error");
+  document.querySelector("#register-add-interest").addEventListener("click", addRegistrationInterest);
+  draft.addEventListener("input", () => hideInlineError(error));
+  draft.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    addRegistrationInterest();
+  });
+  document.querySelector("#register-interest-choices").addEventListener("change", (event) => {
+    if (event.target.checked && registrationInterestInputs().filter((input) => input.checked).length > 30) {
+      event.target.checked = false;
+      showInlineError(error, "最多选择 30 项活动，请先取消一项。");
+    } else hideInlineError(error);
+    updateRegistrationInterestCount();
+  });
+  elements.registerForm.addEventListener("reset", () => {
+    elements.registerForm.querySelectorAll(".registration-custom-interest").forEach((row) => row.remove());
+    document.querySelector("#register-interest-count").textContent = "已选择 0 项，最多 30 项。";
+    hideInlineError(error);
+  });
+  updateRegistrationInterestCount();
 }
 
 function registrationPayload() {
@@ -523,12 +638,15 @@ async function handleRegister(event) {
   }
   hideInlineError(elements.authError);
   elements.authAppealButton.classList.add("is-hidden");
+  if (document.querySelector("#register-custom-interest").value.trim() && !addRegistrationInterest()) return;
   const button = event.submitter;
   setButtonLoading(button, true, "正在创建账号…");
   const payload = registrationPayload();
   const interests = payload.interests;
-  if (!interests.length) {
-    showInlineError(elements.authError, "至少选一个平时喜欢的活动，这样 Agent 才知道从哪里开始。 ");
+  if (!interests.length || interests.length > 30 || interests.some((value) => [...value].length > 50)) {
+    const message = !interests.length ? "至少选一个平时喜欢的活动，这样 Agent 才知道从哪里开始。 "
+      : interests.length > 30 ? "平时喜欢的活动最多选择 30 项，请取消部分选项。" : "喜欢的活动每项最多 50 个字，请修改后重试。";
+    showInlineError(elements.authError, message);
     document.querySelector(".onboarding-choices").scrollIntoView({ behavior: "smooth", block: "center" });
     setButtonLoading(button, false);
     return;
@@ -710,7 +828,7 @@ async function claimStudentId(event) {
 function switchTab(tabName) {
   if (state.user && !["南京", "江阴"].includes(state.user.campus) && tabName !== "profile") {
     tabName = "profile";
-    showToast("先在我的画像中确认校区，才能查看活动和搭子");
+    showToast("先在个人主页中确认校区，才能查看活动和搭子");
   }
   document.querySelectorAll(".nav-button[data-tab]").forEach((button) => {
     const active = button.dataset.tab === tabName;
@@ -729,6 +847,7 @@ function switchTab(tabName) {
     loadActivities();
     renderActivityUpdates();
   }
+  setSquareActive(tabName === "square");
   if (tabName === "square") loadSquare(false);
   if (tabName === "match" && !state.preview) loadAgentMode();
   if (tabName === "invitations" || tabName === "activities") loadNotifications();
@@ -1440,47 +1559,206 @@ function resetMatchResult() {
   elements.matchForm.querySelector("textarea[name='personal_requirement']").focus();
 }
 
-async function loadSquare(append = false) {
-  if (!state.token) return;
-  const form = new FormData(elements.squareFilterForm);
-  const params = new URLSearchParams({
-    offset: String(append ? state.squareOffset : 0),
-    limit: "12",
+function squareCanRefresh() {
+  return squareLive.active && Boolean(state.token && state.user) && !document.hidden && navigator.onLine !== false;
+}
+
+function squareFilterKey() {
+  return JSON.stringify(squareLive.filters);
+}
+
+function setSquareStatus(message) {
+  const status = document.querySelector("#square-sync-status");
+  if (status.textContent !== message) status.textContent = message;
+}
+
+function renderSquareNewItems() {
+  const button = document.querySelector("#square-new-items");
+  button.classList.toggle("is-hidden", !squareLive.pendingIds.length);
+  button.textContent = `有 ${squareLive.pendingIds.length} 条新活动，点击查看`;
+}
+
+function pauseSquareLive() {
+  window.clearTimeout(squareLive.timer);
+  window.clearInterval(squareLive.clockTimer);
+  squareLive.timer = null;
+  squareLive.clockTimer = null;
+  squareLive.contextRevision += 1;
+  squareLive.controller?.abort();
+  squareLive.controller = null;
+  squareLive.busy = false;
+  elements.squareList.setAttribute("aria-busy", "false");
+  elements.squareLoadMore.disabled = false;
+}
+
+function scheduleSquareLive() {
+  window.clearTimeout(squareLive.timer);
+  window.clearInterval(squareLive.clockTimer);
+  squareLive.timer = null;
+  squareLive.clockTimer = null;
+  if (!squareCanRefresh()) return;
+  squareLive.clockTimer = window.setInterval(updateSquareClocks, 1000);
+  squareLive.timer = window.setTimeout(async () => {
+    await loadSquare(false, { probe: true });
+    scheduleSquareLive();
+  }, 30_000);
+}
+
+function setSquareActive(active) {
+  if (squareLive.active !== active) pauseSquareLive();
+  squareLive.active = active;
+  if (!active) document.querySelector("#square-filter-dialog").close();
+  scheduleSquareLive();
+}
+
+function resetSquareLive() {
+  pauseSquareLive();
+  squareLive.active = false;
+  squareLive.ownerKey = "";
+  squareLive.loadedFilterKey = "";
+  squareLive.filters = { search: "", category: "", date: "" };
+  squareLive.categories = [];
+  squareLive.pendingIds = [];
+  squareLive.joining.clear();
+  state.squareItems = [];
+  state.squareOffset = 0;
+  state.squareHasMore = false;
+  document.querySelector("#square-search-form").reset();
+  document.querySelector("#square-filter-dialog").close();
+  document.querySelector("#square-filter-count").classList.add("is-hidden");
+  elements.squareList.innerHTML = "";
+  elements.squareLoadMore.classList.add("is-hidden");
+  renderSquareNewItems();
+}
+
+function squareRelativeTime(value, now = Date.now()) {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "刚刚发布";
+  const minutes = Math.floor(Math.max(0, now - time) / 60_000);
+  if (!minutes) return "刚刚发布";
+  if (minutes < 60) return `${minutes} 分钟前发布`;
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前发布`;
+  return `${Math.floor(minutes / 1440)} 天前发布`;
+}
+
+function updateSquareClocks() {
+  elements.squareList.querySelectorAll("[data-square-created]").forEach((node) => {
+    node.textContent = squareRelativeTime(node.dataset.squareCreated);
   });
-  const category = String(form.get("category") || "").trim();
-  const search = String(form.get("search") || "").trim();
-  const date = String(form.get("date") || "").trim();
-  if (category) params.set("category", category);
-  if (search) params.set("search", search);
-  if (date) params.set("date", date);
-  if (!append) {
-    elements.squareList.innerHTML = `<div class="empty-list">正在把活动摊开给你看…</div>`;
+}
+
+function mergeSquareProbe(existing, incoming, hasMore) {
+  const currentIds = new Set(existing.map((item) => item.activity.id));
+  const latest = new Map(incoming.map((item) => [item.activity.id, item]));
+  const lastCovered = hasMore
+    ? existing.reduce((last, item, index) => latest.has(item.activity.id) ? index : last, -1)
+    : existing.length - 1;
+  const items = existing.flatMap((item, index) => {
+    const updated = latest.get(item.activity.id);
+    if (updated) return [updated];
+    if (index <= lastCovered || new Date(item.activity.starts_at).getTime() <= Date.now()) return [];
+    return [item];
+  });
+  return { items, newIds: incoming.filter((item) => !currentIds.has(item.activity.id)).map((item) => item.activity.id) };
+}
+
+async function loadSquare(append = false, { probe = false } = {}) {
+  if (!squareCanRefresh()) {
+    if (squareLive.active && navigator.onLine === false) setSquareStatus("当前已离线，保留已加载的活动；联网后自动更新");
+    return;
   }
+  const ownerKey = `${state.token}:${state.user.id}`;
+  if (squareLive.ownerKey !== ownerKey) {
+    pauseSquareLive();
+    squareLive.ownerKey = ownerKey;
+    state.squareItems = [];
+    state.squareOffset = 0;
+    state.squareHasMore = false;
+    squareLive.pendingIds = [];
+  }
+  const filterKey = squareFilterKey();
+  if (squareLive.loadedFilterKey !== filterKey) { append = false; probe = false; }
+  if ((append || probe) && squareLive.busy) return;
+  squareLive.controller?.abort();
+  const controller = new AbortController();
+  const requestRevision = ++squareLive.requestRevision;
+  const contextRevision = squareLive.contextRevision;
+  const token = state.token;
+  const userId = state.user.id;
+  const stillCurrent = () => squareCanRefresh() && contextRevision === squareLive.contextRevision
+    && requestRevision === squareLive.requestRevision && token === state.token && userId === state.user?.id
+    && filterKey === squareFilterKey();
+  squareLive.controller = controller;
+  squareLive.busy = true;
   elements.squareLoadMore.disabled = true;
+  if (!probe) {
+    elements.squareList.setAttribute("aria-busy", "true");
+    setSquareStatus(append ? "正在加载更多活动…" : "正在刷新活动…");
+    if (!state.squareItems.length) elements.squareList.innerHTML = `<div class="empty-list">正在把活动摊开给你看…</div>`;
+  }
+  const params = new URLSearchParams({ offset: String(append ? state.squareOffset : 0), limit: probe ? "30" : "12" });
+  Object.entries(squareLive.filters).forEach(([key, value]) => { if (value) params.set(key, value); });
   try {
-    const page = await api(`/activities/square?${params.toString()}`);
-    const categorySelect = elements.squareFilterForm.elements.category;
-    categorySelect.innerHTML = `<option value="">全部类型</option>${page.categories
-      .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
-      .join("")}`;
-    if (category && !page.categories.includes(category)) {
-      categorySelect.value = "";
-      await loadSquare(false);
-      return;
+    // Capture the token: a late response must never log out or overwrite a different account.
+    const response = await fetch(`${API_ROOT}/activities/square?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,
+    });
+    const page = await response.json();
+    if (!stillCurrent()) return;
+    if (!response.ok) {
+      const error = new Error(formatApiError(page, `请求失败（${response.status}）`));
+      error.status = response.status;
+      throw error;
     }
-    categorySelect.value = category;
-    state.squareItems = append ? [...state.squareItems, ...page.items] : page.items;
-    state.squareOffset = page.next_offset ?? state.squareItems.length;
-    state.squareHasMore = page.has_more;
-    renderSquare();
+    squareLive.categories = page.categories || [];
+    let changed = true;
+    if (probe) {
+      const oldLength = state.squareItems.length;
+      const tailId = state.squareItems.at(-1)?.activity.id;
+      const merged = mergeSquareProbe(state.squareItems, page.items, page.has_more);
+      changed = JSON.stringify(state.squareItems) !== JSON.stringify(merged.items);
+      const tailIndex = page.items.findIndex((item) => item.activity.id === tailId);
+      squareLive.pendingIds = merged.newIds;
+      state.squareItems = merged.items;
+      if (tailIndex >= 0) {
+        state.squareOffset = tailIndex + 1;
+        state.squareHasMore = page.has_more;
+      } else {
+        state.squareOffset = Math.max(0, state.squareOffset + merged.newIds.length - (oldLength - merged.items.length));
+        if (!page.has_more) state.squareHasMore = false;
+      }
+    } else {
+      const items = append ? [...state.squareItems, ...page.items] : page.items;
+      state.squareItems = [...new Map(items.map((item) => [item.activity.id, item])).values()];
+      state.squareOffset = page.next_offset ?? (append ? state.squareOffset + page.items.length : page.items.length);
+      state.squareHasMore = page.has_more;
+      squareLive.loadedFilterKey = filterKey;
+      if (!append) squareLive.pendingIds = [];
+    }
+    if (changed) renderSquare();
+    elements.squareLoadMore.classList.toggle("is-hidden", !state.squareHasMore);
+    renderSquareNewItems();
+    setSquareStatus("已更新 · 最新发布优先");
   } catch (error) {
-    if (!append) elements.squareList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}</div>`;
+    if (!stillCurrent() || error.name === "AbortError") return;
+    if (error.status === 401) { logout(false); return; }
+    if (!state.squareItems.length) elements.squareList.innerHTML = `<div class="empty-list">${escapeHtml(error.message)}<p>点击刷新活动重试。</p></div>`;
+    setSquareStatus(state.squareItems.length ? "暂时无法更新，保留上次结果；可点击刷新重试" : "活动暂时加载失败，请点击刷新重试");
   } finally {
-    elements.squareLoadMore.disabled = false;
+    if (requestRevision === squareLive.requestRevision && contextRevision === squareLive.contextRevision) {
+      squareLive.busy = false;
+      squareLive.controller = null;
+      elements.squareList.setAttribute("aria-busy", "false");
+      elements.squareLoadMore.disabled = false;
+      scheduleSquareLive();
+    }
   }
 }
 
 function renderSquare() {
+  const focusedId = document.activeElement?.dataset.joinSquare;
+  const expanded = new Set([...elements.squareList.querySelectorAll(".square-live-fit[open]")]
+    .map((detail) => detail.closest("[data-square-activity]")?.dataset.squareActivity));
   elements.squareLoadMore.classList.toggle("is-hidden", !state.squareHasMore);
   if (!state.squareItems.length) {
     elements.squareList.innerHTML = `<div class="empty-list empty-list-playful"><img src="/static/mascot-bloom.svg" alt="" aria-hidden="true" /><strong>暂时没有符合筛选条件的活动</strong><p>换个地点、日期或活动类型看看吧。</p></div>`;
@@ -1492,39 +1770,126 @@ function renderSquare() {
       const reasons = item.recommendation_reasons
         .map((reason) => `<span>${escapeHtml(reason)}</span>`)
         .join("");
-      const action = item.joined
+      const action = squareLive.joining.has(`${state.token}:${activity.id}`)
+        ? `<button class="button button-quiet" type="button" disabled>正在处理…</button>`
+        : item.joined
         ? `<button class="button button-quiet" type="button" disabled>已经加入</button>`
         : item.application_status === "pending"
           ? `<button class="button button-quiet" type="button" disabled>申请等待全员同意</button>`
         : item.joinable
           ? `<button class="button button-primary" type="button" data-join-square="${escapeHtml(activity.id)}">${activity.join_policy === "approval" ? "申请加入" : "加入这场"}</button>`
           : `<button class="button button-quiet" type="button" disabled>${escapeHtml(item.join_reason || "暂不能加入")}</button>`;
-      return `<article class="square-card">
-        <div class="square-card-top"><span class="activity-role">${escapeHtml(activity.category)}</span><span class="square-score">适合度 ${escapeHtml(item.recommendation_score)}</span></div>
+      const remaining = Math.max(0, activity.capacity - activity.participant_count);
+      const recruitment = activity.recruitment_status || (remaining ? "recruiting" : "full");
+      const statusLabel = { recruiting: "招募中", full: "已满员", ended: "已结束" }[recruitment] || "招募中";
+      return `<article class="square-card square-live-card" data-square-activity="${escapeHtml(activity.id)}">
+        <div class="square-card-top"><span class="activity-role">${escapeHtml(activity.category)}</span><time class="square-live-created" datetime="${escapeHtml(activity.created_at || "")}" data-square-created="${escapeHtml(activity.created_at || "")}">${squareRelativeTime(activity.created_at)}</time></div>
         ${activity.same_gender_only ? `<span class="same-gender-tag">仅同性加入</span>` : ""}
         <span class="same-gender-tag">${activity.join_policy === "approval" ? "入局需全员同意" : "可自由加入"}</span>
         <h2>${escapeHtml(activity.title)}</h2>
         <p class="square-time">${escapeHtml(formatDate(activity.starts_at))}</p>
         <p class="square-location">${escapeHtml(activity.location)} · ${activity.participant_count}/${activity.capacity} 人</p>
+        <p class="square-live-recruitment"><span>${statusLabel}</span><strong>${remaining ? `还差 ${remaining} 人` : "人数已满"}</strong></p>
         ${activityGenderSummary(activity)}
         ${activity.description ? `<p class="square-description">${escapeHtml(activity.description)}</p>` : ""}
-        <div class="candidate-reasons">${reasons}</div>
+        <details class="square-live-fit"${expanded.has(activity.id) ? " open" : ""}><summary>适合度 ${escapeHtml(item.recommendation_score)}</summary><div class="candidate-reasons">${reasons}</div></details>
         <div class="square-card-action">${action}</div>
       </article>`;
     })
     .join("");
+  if (focusedId) elements.squareList.querySelector(`[data-join-square="${CSS.escape(focusedId)}"]`)?.focus({ preventScroll: true });
 }
 
 async function joinSquareActivity(button) {
+  const activityId = button.dataset.joinSquare;
+  const joiningKey = `${state.token}:${activityId}`;
+  if (squareLive.joining.has(joiningKey)) return;
+  const token = state.token;
+  const userId = state.user?.id;
+  squareLive.joining.add(joiningKey);
   setButtonLoading(button, true, "正在处理…");
   try {
-    const result = await api(`/activities/${button.dataset.joinSquare}/join`, { method: "POST" });
+    const result = await api(`/activities/${activityId}/join`, { method: "POST" });
+    if (token !== state.token || userId !== state.user?.id) return;
     showToast(result.message);
     await Promise.all([loadSquare(false), loadActivities(true)]);
   } catch (error) {
-    showToast(error.message);
+    if (token === state.token && userId === state.user?.id) showToast(error.message);
     setButtonLoading(button, false);
+  } finally {
+    squareLive.joining.delete(joiningKey);
   }
+}
+
+function commitSquareFilters(values) {
+  squareLive.filters = { ...squareLive.filters, ...values };
+  squareLive.pendingIds = [];
+  renderSquareNewItems();
+  const count = Number(Boolean(squareLive.filters.category)) + Number(Boolean(squareLive.filters.date));
+  const badge = document.querySelector("#square-filter-count");
+  badge.textContent = String(count);
+  badge.classList.toggle("is-hidden", !count);
+  loadSquare(false);
+}
+
+function initializeSquareLive() {
+  if (squareLive.initialized) return;
+  squareLive.initialized = true;
+  const searchForm = document.querySelector("#square-search-form");
+  const dialog = document.querySelector("#square-filter-dialog");
+  const panel = document.querySelector("#panel-square");
+  const submitSearch = () => commitSquareFilters({ search: searchForm.elements.search.value.trim().slice(0, 160) });
+  searchForm.addEventListener("submit", (event) => { event.preventDefault(); submitSearch(); });
+  searchForm.elements.search.addEventListener("search", submitSearch);
+  document.querySelector("#square-filter-open").addEventListener("click", () => {
+    const categories = [...new Set([...squareLive.categories, squareLive.filters.category].filter(Boolean))];
+    elements.squareFilterForm.elements.category.innerHTML = `<option value="">全部类型</option>${categories.map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join("")}`;
+    elements.squareFilterForm.elements.category.value = squareLive.filters.category;
+    elements.squareFilterForm.elements.date.value = squareLive.filters.date;
+    dialog.showModal();
+  });
+  elements.squareFilterForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    commitSquareFilters({ category: elements.squareFilterForm.elements.category.value, date: elements.squareFilterForm.elements.date.value });
+    dialog.close();
+  });
+  dialog.querySelectorAll("[data-square-filter-cancel]").forEach((button) => button.addEventListener("click", () => dialog.close()));
+  document.querySelector("#square-new-items").addEventListener("click", () => loadSquare(false));
+  document.querySelector("#square-publish-button").addEventListener("click", () => window.dispatchEvent(new CustomEvent("dazi:publish-from-square")));
+  window.addEventListener("dazi:publish-from-square", () => {
+    if (state.matchConfirmPending) return;
+    resetMatchResult(); switchTab("match"); elements.matchForm.elements.title.focus();
+  });
+  elements.squareLoadMore.addEventListener("click", () => loadSquare(true));
+  const resume = () => {
+    if (!squareCanRefresh()) {
+      pauseSquareLive();
+      if (squareLive.active && navigator.onLine === false) setSquareStatus("当前已离线，保留已加载的活动；联网后自动更新");
+    } else {
+      scheduleSquareLive();
+      loadSquare(false, { probe: Boolean(state.squareItems.length) });
+    }
+  };
+  document.addEventListener("visibilitychange", resume);
+  window.addEventListener("online", resume);
+  window.addEventListener("offline", resume);
+  panel.addEventListener("touchstart", (event) => {
+    squareLive.pull = squareCanRefresh() && window.scrollY <= 0 && event.touches.length === 1
+      && !dialog.open && !event.target.closest("input, textarea, select, button, a, [contenteditable]")
+      ? { x: event.touches[0].clientX, y: event.touches[0].clientY, distance: 0 } : null;
+  }, { passive: true });
+  panel.addEventListener("touchmove", (event) => {
+    if (!squareLive.pull) return;
+    if (event.touches.length !== 1 || Math.abs(event.touches[0].clientX - squareLive.pull.x) > 35) { squareLive.pull = null; return; }
+    squareLive.pull.distance = event.touches[0].clientY - squareLive.pull.y;
+    if (squareLive.pull.distance > 24) setSquareStatus(squareLive.pull.distance >= 80 ? "松开刷新活动" : "继续下拉刷新活动");
+  }, { passive: true });
+  panel.addEventListener("touchend", () => {
+    const refresh = squareLive.pull?.distance >= 80 && window.scrollY <= 0;
+    squareLive.pull = null;
+    if (refresh) loadSquare(false);
+  }, { passive: true });
+  panel.addEventListener("touchcancel", () => { squareLive.pull = null; }, { passive: true });
 }
 
 function invitationStatusLabel(status) {
@@ -2157,7 +2522,7 @@ async function checkAndroidRelease() {
       updateLink.classList.remove("is-hidden");
       updateLink.textContent = `更新至 ${release.version_name}`;
       if (!IS_NATIVE_ANDROID && sessionStorage.getItem("dazi_android_notice") !== String(release.version_code)) {
-        showToast("安卓应用有新版本，到我的画像下载更新");
+        showToast("安卓应用有新版本，到个人主页下载更新");
         sessionStorage.setItem("dazi_android_notice", String(release.version_code));
       }
     }
@@ -3067,6 +3432,10 @@ function applySanitizedSubmission(fields, path) {
     : path === "/auth/student-id-appeals" ? elements.studentAppealForm : null;
   if (!form) return;
   Object.entries(fields).forEach(([name, value]) => {
+    if (form === elements.registerForm && name === "interests" && Array.isArray(value)) {
+      applyRegistrationInterests(value);
+      return;
+    }
     if (name === "hobby_skills" && Array.isArray(value)) {
       form.querySelectorAll("[data-skill-name], [name=register_skill_name]").forEach((input, index) => {
         if (value[index]) input.value = value[index].name;
@@ -3089,6 +3458,7 @@ function bindEvents() {
   elements.avatarRemove.addEventListener("click", () => changeAvatar(true));
   initializePasswordControls();
   initializeHumanChallenges();
+  initializeRegistrationInterests();
   document.querySelector("#credit-help-button").addEventListener("click", () => document.querySelector("#credit-help-dialog").showModal());
   document.querySelector("#review-selection-button").addEventListener("click", () => showMatchStep("review"));
   document.querySelector("#selection-to-settings").addEventListener("click", () => showMatchStep("settings"));
@@ -3238,11 +3608,7 @@ function bindEvents() {
     });
   });
 
-  elements.squareFilterForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    loadSquare(false);
-  });
-  elements.squareLoadMore.addEventListener("click", () => loadSquare(true));
+  initializeSquareLive();
   elements.squareList.addEventListener("click", (event) => {
     const participantButton = event.target.closest("[data-activity-participants]");
     if (participantButton) {

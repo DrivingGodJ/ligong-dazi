@@ -752,6 +752,49 @@ a:focus-visible {
   grid-template-columns: repeat(3, 1fr);
 }
 
+#register-form .registration-custom-interest-entry {
+  display: flex;
+  gap: 0.6rem;
+  align-items: end;
+  margin-top: 0.85rem;
+}
+
+#register-form .registration-custom-interest-entry label {
+  flex: 1;
+  min-width: 0;
+}
+
+#register-form .registration-custom-interest-entry button {
+  flex: 0 0 auto;
+}
+
+#register-form .registration-custom-interest {
+  display: flex;
+  min-width: 0;
+  gap: 0.2rem;
+  align-items: start;
+}
+
+#register-form .registration-custom-interest .choice-chip {
+  flex: 1;
+  min-width: 0;
+}
+
+#register-form .registration-custom-interest .choice-chip span {
+  overflow-wrap: anywhere;
+}
+
+#register-form .registration-interest-remove {
+  min-width: 26px;
+  min-height: 44px;
+  padding: 0.1rem;
+  font-size: 1.2rem;
+}
+
+#register-form .onboarding-choices > p {
+  margin: 0.55rem 0 0;
+}
+
 .social-cards {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -9,6 +9,7 @@ from pydantic import (
     EmailStr,
     Field,
     SecretStr,
+    ValidationInfo,
     computed_field,
     field_validator,
     model_validator,
@@ -89,8 +90,11 @@ class RegisterRequest(ApiModel):
 
     @field_validator("interests", "preferred_locations")
     @classmethod
-    def clean_registration_lists(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
+    def clean_registration_lists(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        cleaned = list(dict.fromkeys(item.strip() for item in value if item.strip()))
+        if info.field_name == "interests" and any(len(item) > 50 for item in cleaned):
+            raise ValueError("喜欢的活动每项最多 50 个字")
+        return cleaned
 
     @field_validator("department")
     @classmethod
@@ -411,6 +415,8 @@ class ActivityPublic(ApiModel):
     personal_requirement: str | None
     same_gender_only: bool
     status: str
+    created_at: datetime
+    recruitment_status: Literal["recruiting", "full", "ended"] = "recruiting"
 
 
 class MatchPreviewRequest(ApiModel):

@@ -272,7 +272,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 
 def ensure_campus(user: User) -> str:
     if user.campus not in {"南京", "江阴"}:
-        raise HTTPException(status_code=403, detail="请先在我的画像中选择南京或江阴校区")
+        raise HTTPException(status_code=403, detail="请先在个人主页中选择南京或江阴校区")
     return user.campus
 
 
@@ -329,9 +329,20 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
         key = normalized_gender(gender)
         gender_counts[key] += int(count)
     count = sum(gender_counts.values())
+    now = utcnow()
+    recruitment_status = (
+        "ended"
+        if (
+            activity.status not in {"open", "formed"}
+            or activity.starts_at <= now
+            or activity.ends_at <= now
+        )
+        else "full" if count >= activity.capacity else "recruiting"
+    )
     return ActivityPublic(
         id=activity.id,
         owner_id=activity.owner_id,
+        created_at=activity.created_at,
         campus=activity.campus,
         join_policy=activity.join_policy,
         title=activity.title,
@@ -346,6 +357,7 @@ async def activity_public(session: AsyncSession, activity: Activity) -> Activity
         personal_requirement=activity.personal_requirement,
         same_gender_only=activity.same_gender_only,
         status=activity.status,
+        recruitment_status=recruitment_status,
     )
 
 
@@ -1313,7 +1325,7 @@ async def create_activity(
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="请先在我的画像中选择男或女，才能创建仅限同性的活动",
+            detail="请先在个人主页中选择男或女，才能创建仅限同性的活动",
         )
     activity = Activity(owner_id=current_user.id, campus=campus, **payload.model_dump())
     session.add(activity)
@@ -1361,16 +1373,38 @@ async def activity_square(
     limit: int = Query(default=12, ge=1, le=30),
 ) -> ActivitySquarePage:
     campus = ensure_campus(current_user)
+    now = utcnow()
+    confirmed_count = (
+        select(func.count(ActivityMember.id))
+        .where(ActivityMember.activity_id == Activity.id, ActivityMember.status == "confirmed")
+        .correlate(Activity)
+        .scalar_subquery()
+    )
+    blocked_owner = (
+        select(UserBlock.id)
+        .where(
+            or_(
+                (UserBlock.blocker_id == current_user.id)
+                & (UserBlock.blocked_id == Activity.owner_id),
+                (UserBlock.blocker_id == Activity.owner_id)
+                & (UserBlock.blocked_id == current_user.id),
+            )
+        )
+        .exists()
+    )
     activities = list(
         (
             await session.scalars(
                 select(Activity)
                 .where(
                     Activity.status.in_(["open", "formed"]),
-                    Activity.starts_at > utcnow(),
+                    Activity.starts_at > now,
+                    Activity.ends_at > now,
                     Activity.campus == campus,
+                    confirmed_count < Activity.capacity,
+                    ~blocked_owner,
                 )
-                .order_by(Activity.starts_at.asc())
+                .order_by(Activity.created_at.desc(), Activity.id.asc())
             )
         ).all()
     )
@@ -1416,13 +1450,6 @@ async def activity_square(
                 recommendation_reasons=reasons,
             )
         )
-    items.sort(
-        key=lambda item: (
-            not item.joinable and not item.joined,
-            -item.recommendation_score,
-            item.activity.starts_at,
-        )
-    )
     page_items = items[offset : offset + limit]
     next_offset = offset + len(page_items)
     has_more = next_offset < len(items)
@@ -2340,7 +2367,7 @@ async def preview_match(
     if payload.same_gender_only and current_user.gender not in {"male", "female"}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="请先在我的画像中选择男或女，才能创建仅限同性的活动",
+            detail="请先在个人主页中选择男或女，才能创建仅限同性的活动",
         )
     latest_request_at = await session.scalar(
         select(func.max(MatchRequest.created_at)).where(

@@ -57,9 +57,9 @@ test("mobile copy avoids the flower region without changing the artwork or page 
   assert.match(reference, /#panel-invitations \.page-heading-floral \{ min-height: 260px/);
   const panels = [...html.matchAll(/id="panel-([^"]+)" class="tab-panel/g)].map((match) => match[1]);
   assert.deepEqual(panels, ["match", "square", "invitations", "activities", "profile"]);
-  assert.match(html, /<h1 id="profile-heading">我的画像<\/h1>/);
+  assert.match(html, /<h1 id="profile-heading">个人主页<\/h1>/);
   assert.match(html, /<strong id="profile-credit">100<\/strong>/);
-  assert.match(html, /<span class="brand-sparkle" aria-hidden="true">✦<\/span> 让 Agent 帮我找/);
+  assert.match(html, /<span class="brand-sparkle" aria-hidden="true">✦<\/span> 让 Agent 帮忙找搭子 \/ 创建活动/);
   assert.match(visual, /\.button-primary \{[^}]*background: linear-gradient\(135deg, #8757e7 0%, #6331c0 100%\)/);
 });
 

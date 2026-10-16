@@ -24,10 +24,10 @@
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=2" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-transparent.png?v=1" />
-    <link rel="stylesheet" href="/static/styles.css?v=25" />
+    <link rel="stylesheet" href="/static/styles.css?v=26" />
     <link rel="stylesheet" href="/static/visual-language.css?v=3" />
-    <link rel="stylesheet" href="/static/reference-ui.css?v=20" />
-    <script src="/static/app.js?v=40" defer></script>
+    <link rel="stylesheet" href="/static/reference-ui.css?v=25" />
+    <script src="/static/app.js?v=44" defer></script>
   </head>
   <body class="is-launching">
     <div id="launch-screen" aria-label="正在打开理工搭子局">
@@ -167,14 +167,14 @@
                   <li>点「分享」→「添加到主屏幕」。</li>
                   <li>从桌面图标打开搭子局，再注册。</li>
                 </ol>
-                <p>要接收系统通知，还需在桌面版的「我的画像」中开启并允许通知。</p>
+                <p>要接收系统通知，还需在桌面版的「个人主页」中开启并允许通知。</p>
               </div>
               <div id="android-install-guide" class="install-guide is-hidden">
                 <strong>安卓：安装搭子局应用</strong>
                 <p>下载并安装官方 APK，再从桌面图标打开搭子局注册。安装时系统可能要求你确认。</p>
                 <a id="android-download-link" class="button button-primary button-wide is-hidden" href="/downloads/ligong-dazi-native.apk">下载安卓 APK</a>
                 <p id="android-download-status" class="registration-download-status" role="status" aria-live="polite">正在检查安装包…</p>
-                <p>要接收系统通知，还需在应用的「我的画像」中开启并允许通知。</p>
+                <p>要接收系统通知，还需在应用的「个人主页」中开启并允许通知。</p>
               </div>
               <button id="continue-web-registration" class="button button-quiet registration-web-button" type="button">暂不安装，继续网页注册</button>
               <p class="registration-web-note">网页注册也能正常使用，邀请和活动消息会保留在站内。</p>
@@ -252,7 +252,7 @@
                 </fieldset>
                 <fieldset class="onboarding-choices">
                   <legend>平时喜欢做什么（至少选一项）</legend>
-                  <div class="choice-grid choice-grid-small">
+                  <div id="register-interest-choices" class="choice-grid choice-grid-small">
                     <label class="choice-chip"><input type="checkbox" name="interests" value="羽毛球" /><span>羽毛球</span></label>
                     <label class="choice-chip"><input type="checkbox" name="interests" value="跑步" /><span>跑步</span></label>
                     <label class="choice-chip"><input type="checkbox" name="interests" value="自习" /><span>自习</span></label>
@@ -260,6 +260,15 @@
                     <label class="choice-chip"><input type="checkbox" name="interests" value="电影" /><span>电影</span></label>
                     <label class="choice-chip"><input type="checkbox" name="interests" value="吃饭" /><span>吃饭</span></label>
                   </div>
+                  <div class="registration-custom-interest-entry">
+                    <label for="register-custom-interest">自定义活动（选填）
+                      <input id="register-custom-interest" type="text" autocomplete="off" placeholder="例如：飞盘、桌游" aria-describedby="register-custom-interest-help register-interest-error" />
+                    </label>
+                    <button id="register-add-interest" class="button button-quiet" type="button">添加活动</button>
+                  </div>
+                  <p id="register-custom-interest-help" class="field-help">每项最多 50 个字，点击添加或按回车。内置和自定义活动合计最多选 30 项。</p>
+                  <p id="register-interest-count" class="field-help" role="status" aria-live="polite">已选择 0 项，最多 30 项。</p>
+                  <p id="register-interest-error" class="form-error is-hidden" role="alert"></p>
                 </fieldset>
                 <section class="onboarding-skill" aria-labelledby="register-skill-heading">
                   <div>
@@ -382,7 +391,7 @@
                 </label>
 
                 <button id="match-submit" class="button button-primary button-wide" type="submit">
-                  <span class="brand-sparkle" aria-hidden="true">✦</span> 让 Agent 帮我找
+                  <span class="brand-sparkle" aria-hidden="true">✦</span> 让 Agent 帮忙找搭子 / 创建活动
                 </button>
               </form>
               <p id="match-request-error" class="form-error is-hidden" role="alert"></p>
@@ -482,30 +491,29 @@
               <span class="hero-hand-note">一起<br />去有趣的地方吧！</span>
             </div>
           </div>
-          <form id="square-filter-form" class="square-filters" aria-label="筛选活动">
-            <label>
-              <span class="field-label-text"><svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>搜索名称或地点</span>
+          <form id="square-search-form" class="square-live-toolbar" role="search" aria-label="搜索活动">
+            <label class="square-live-search">
+              <span class="square-live-search-label">搜索名称或地点</span>
               <input name="search" type="search" maxlength="160" placeholder="例如：夜跑、南区体育馆" />
             </label>
-            <label>
-              <span class="field-label-text"><svg class="field-icon field-icon-filled" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg>活动类型</span>
-              <select name="category">
-                <option value="">全部类型</option>
-              </select>
-            </label>
-            <label>
-              <span class="field-label-text"><svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3m10-3v3M4 8h16v12H4V8Zm4 4h3m2 0h3m-8 4h3m2 0h3" /></svg>日期</span>
-              <input name="date" type="date" />
-            </label>
-            <div class="square-filter-actions">
-              <button class="button button-quiet" type="button" data-refresh="square">↻ 刷新活动</button>
-              <button class="button button-primary" type="submit">▽ 筛选活动</button>
-            </div>
+            <button id="square-filter-open" class="button button-quiet square-live-filter-button" type="button" aria-haspopup="dialog" aria-controls="square-filter-dialog">筛选<span id="square-filter-count" class="is-hidden" aria-hidden="true"></span></button>
+            <button class="button button-quiet square-live-refresh" type="button" data-refresh="square" aria-label="刷新活动" title="刷新活动">↻</button>
           </form>
-          <div id="square-list" class="square-grid" aria-live="polite"></div>
+          <p id="square-sync-status" class="square-live-sync" role="status">最新发布优先 · 下拉也能刷新</p>
+          <button id="square-new-items" class="button square-live-new-items is-hidden" type="button"></button>
+          <div id="square-list" class="square-grid" aria-label="实时活动列表" aria-busy="false"></div>
           <div class="load-more-row">
             <button id="square-load-more" class="button button-quiet is-hidden" type="button">再看一批</button>
           </div>
+          <button id="square-publish-button" class="button button-primary square-live-publish" type="button" aria-label="发布新活动"><span aria-hidden="true">＋</span><span>发布</span></button>
+          <dialog id="square-filter-dialog" class="modal-card square-live-filter-sheet" aria-labelledby="square-filter-heading">
+            <form id="square-filter-form" class="square-live-filter-shell">
+              <header class="square-live-filter-heading"><h2 id="square-filter-heading">筛选活动</h2><button class="button button-quiet square-live-cancel" type="button" data-square-filter-cancel aria-label="关闭活动筛选">×</button></header>
+              <label>活动类型<select name="category"><option value="">全部类型</option></select></label>
+              <label>日期<input name="date" type="date" /></label>
+              <div class="square-live-filter-footer"><button class="button button-primary" type="submit">确认筛选</button><button class="button button-quiet" type="button" data-square-filter-cancel>取消</button></div>
+            </form>
+          </dialog>
         </section>
 
         <section id="panel-invitations" class="tab-panel is-hidden" data-panel="invitations" aria-labelledby="invitations-heading">
@@ -565,7 +573,7 @@
           <div class="page-heading page-heading-floral">
             <div>
               <p class="eyebrow">匹配依据</p>
-              <h1 id="profile-heading">我的画像</h1>
+              <h1 id="profile-heading">个人主页</h1>
               <p class="heading-copy">完善兴趣、常去地点和相处方式，能让下一次匹配更懂你。</p>
             </div>
             <div class="page-heading-aside profile-heading-aside">
@@ -711,7 +719,7 @@
       <button class="nav-button" type="button" data-tab="square"><svg class="nav-icon nav-grid" viewBox="0 0 40 40" aria-hidden="true"><rect x="5" y="8" width="12" height="12" rx="3"/><rect x="22" y="8" width="12" height="12" rx="3"/><rect x="5" y="23" width="12" height="12" rx="3"/><rect x="22" y="23" width="12" height="12" rx="3"/><path class="nav-sparkle" d="m34 2 1.4 3.6L39 7l-3.6 1.4L34 12l-1.4-3.6L29 7l3.6-1.4L34 2Z"/></svg><span class="nav-label">活动广场</span></button>
       <button class="nav-button" type="button" data-tab="invitations"><svg class="nav-icon nav-envelope" viewBox="0 0 40 40" aria-hidden="true"><rect x="4" y="10" width="32" height="22" rx="5"/><path d="m6 13 14 11 14-11"/><circle class="nav-alert-dot" cx="33" cy="9" r="4"/></svg><span class="nav-label">邀请</span><span id="invite-badge" class="nav-badge is-hidden" aria-label="未处理邀请数量">0</span></button>
       <button class="nav-button" type="button" data-tab="activities"><svg class="nav-icon nav-clock" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="21" r="15"/><path d="M20 12v10l7 4M32 4l2 4m3 0-4 2"/></svg><span class="nav-label">我的活动</span><span id="activity-badge" class="nav-badge nav-badge-mint is-hidden" aria-label="待评价数量">0</span></button>
-      <button class="nav-button" type="button" data-tab="profile"><svg class="nav-icon nav-face-icon" viewBox="0 0 40 40" aria-hidden="true"><circle cx="19" cy="21" r="15"/><circle class="nav-face" cx="14" cy="20" r="1.4"/><circle class="nav-face" cx="24" cy="20" r="1.4"/><path class="nav-smile" d="M13 25c4 4 8 4 12 0"/><path class="nav-heart" d="M30 7c3-5 10-2 8 3-1 3-5 6-8 8-3-2-7-5-8-8-2-5 5-8 8-3Z"/></svg><span class="nav-label">我的画像</span></button>
+      <button class="nav-button" type="button" data-tab="profile"><svg class="nav-icon nav-face-icon" viewBox="0 0 40 40" aria-hidden="true"><circle cx="19" cy="21" r="15"/><circle class="nav-face" cx="14" cy="20" r="1.4"/><circle class="nav-face" cx="24" cy="20" r="1.4"/><path class="nav-smile" d="M13 25c4 4 8 4 12 0"/><path class="nav-heart" d="M30 7c3-5 10-2 8 3-1 3-5 6-8 8-3-2-7-5-8-8-2-5 5-8 8-3Z"/></svg><span class="nav-label">个人主页</span></button>
     </nav>
 
     <dialog id="match-tour-dialog" class="modal-card match-tour-dialog" aria-labelledby="match-tour-title">
