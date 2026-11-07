@@ -2,59 +2,42 @@
 
 # Ligong Dazi
 
-A campus activity and companion-matching app: discover activities on your campus, find suitable partners, and confirm before creating an activity, inviting someone or applying to join.
+For a game, a study session or a campus activity, turn “we need one more person” into a plan that actually comes together.
 
-[Open website](https://ligong-dazi.zeabur.app/) · [Download native Android app](https://ligong-dazi.zeabur.app/downloads/ligong-dazi-native.apk) · [Releases](https://github.com/DrivingGodJ/ligong-dazi/releases)
+[Open Ligong Dazi](https://ligong-dazi.zeabur.app/)
 
-## Features
+<p>
+  <img src="docs/review-20261005/profile-mobile-final-light.png" width="300" alt="Profile information and preference settings" />
+  <img src="docs/review-20261005/profile-polish-light.png" width="300" alt="Personal summary, reliability and activity reminders" />
+</p>
 
-- **Explainable matching** uses activity, place, time, interests, reliability and social preferences, with natural-language requirements.
-- **Activity workflow** includes discovery, invitations, join requests, rescheduling votes, calendar export, reminders and meetup photos.
-- **Profiles** include interests and skill levels, avatars, introductions and a separate activity/review-based profile.
-- **Controlled collaboration** requires user confirmation for writes; model queries use read-only tools and keep Agent audit trails.
-- **Multiple clients** include the website, a home-screen web app and an Android app with bundled interface assets.
+*Interface examples use existing repository previews; some navigation labels vary by version.*
 
-## Quick start
+## Find more than a shared activity
 
-Open the website, register, choose the Nanjing or Jiangyin campus and complete your profile. Default rule-based matching does not require a paid model API. Android users can install the native app; iPhone users can add the site to the home screen through Safari.
+Enter an activity, time and what you have in mind. Discover existing activities on your campus or look for suitable partners. Matching considers interests, location, time, skill and social preferences, explains its recommendations and accepts requests such as finding an experienced partner to help a beginner.
 
-Local development requires **Python 3.12+** and [uv](https://docs.astral.sh/uv/). From the repository root:
+## Get to know each other first
 
-```bash
-cp .env.example .env
-uv sync --dev
-uv run uvicorn app.main:app --reload
-```
+Profiles describe interests, skills, familiar places and social preferences. Activities and reviewed feedback add context about reliability. Look through candidates before deciding whom to join.
 
-Open the [local app](http://127.0.0.1:8000/), [admin console](http://127.0.0.1:8000/admin) or [API docs](http://127.0.0.1:8000/docs). SQLite is created under `data/` on first launch. Use `uv run python -m scripts.seed_demo` for development/test demo data.
+## Follow through on the plan
 
-## Usage
+Confirm before publishing, inviting or applying, then keep the arrangement under My Activities. Receive reminders, share meetup photos and vote on rescheduling. Leave feedback afterward; situations needing verification enter a review process.
 
-1. Browse your campus's activities, or submit an activity type, time and preferences. Location may remain empty during matching.
-2. Review candidates, explanations and profiles, then confirm joining, publishing or inviting. New activities require a location before creation.
-3. Manage plans, rescheduling and withdrawal under My Activities. Cancelling within the final hour costs reliability points; cancellation is unavailable after the start.
-4. Submit feedback after the activity; serious or contradictory reports go to third-party review.
+## Try it
 
-Push notifications require opt-in; the inbox works without them. Changes to the Android app's bundled interface require a new build. Private account and activity data are not cached offline. See the detailed reference for signing, upgrades and push configuration.
+Register on the website, choose the Nanjing or Jiangyin campus and complete your basic profile to browse activities. Default rule-based matching does not require a paid model API.
 
-Production requires appropriate CAPTCHA, administrator access, trusted-proxy and persistent-storage configuration. Student cards, avatars and meetup photos have distinct access controls; do not expose development settings publicly. Keep model keys in `.env` or platform secrets. Sensitive attributes are excluded from Agent ranking. See the [detailed reference (Chinese)](docs/readme-reference.zh-CN.md) for accounts, retention, identity appeals and reliability rules.
+[Website](https://ligong-dazi.zeabur.app/) · [Android app](https://ligong-dazi.zeabur.app/downloads/ligong-dazi-native.apk) · [Releases](https://github.com/DrivingGodJ/ligong-dazi/releases)
 
-## Development and checks
+## Explore further
 
-```bash
-uv run pytest
-uv run ruff check .
-```
+| Topic | Documentation |
+| --- | --- |
+| Usage, local startup and data permissions | [User guide](docs/GUIDE.en.md) |
+| Reliability, notifications, accounts and Android upgrades | [Full feature reference (Chinese)](docs/readme-reference.zh-CN.md) |
+| Host your own service | [Zeabur](DEPLOY_ZEABUR.md) · [Railway](DEPLOY_RAILWAY.md) |
+| Updates and collaboration | [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/DrivingGodJ/ligong-dazi/issues) |
 
-SQLite supports local startup; production can use PostgreSQL with explicit schema migrations. OpenAI Tool Calling-compatible model services are supported, while rule matching works without a configured model. Real Android/iOS use, installation, upgrades and push delivery require device validation; a successful build does not establish reliable delivery.
-
-## Documentation and support
-
-- [Detailed features, permissions, synchronization and maintenance (Chinese)](docs/readme-reference.zh-CN.md)
-- [Zeabur deployment](DEPLOY_ZEABUR.md) · [Railway deployment](DEPLOY_RAILWAY.md)
-- [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
-- [Report an issue](https://github.com/DrivingGodJ/ligong-dazi/issues)
-
-## License and credits
-
-The repository currently provides no standalone repository-wide license. Public visibility does not grant unrestricted redistribution or commercial use; confirm terms with the rights holder.
+See the [guide](docs/GUIDE.en.md#license-and-credits) for licensing and usage terms.
